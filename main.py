@@ -61,14 +61,61 @@ def clean_to_english(text):
     import unicodedata
     return "".join(c for c in unicodedata.normalize('NFD', text) if unicodedata.category(c) != 'Mn')
 
-# ৩. স্টার্ট কমান্ড
+# ③. স্টার্ট কমান্ড
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    welcome_text = "👋 **ফেক প্রোফাইল জেনারেটর বটে স্বাগতম!**\n\nযেকোনো দেশের নাম লিখুন (যেমন: `Bangladesh`, `USA`), বট আপনাকে ছেলেদের ১০০% ইউনিক ফেক প্রোফাইল দেবে।"
-    bot.reply_to(message, welcome_text, parse_mode="Markdown")
+    welcome_text = "👋 ফেক প্রোফাইল জেনারেটর বটে স্বাগতম!\n\nযেকোনো দেশের নাম লিখুন (যেমন: Bangladesh, USA বা India), বট আপনাকে ছেলেদের ১০০% ইউনিক ফেক প্রোফাইল দেবে।"
+    bot.reply_to(message, welcome_text)
 
-# ৪. অ্যাডমিন প্যানেল
+# ④. অ্যাডমিন প্যানেল
 @bot.message_handler(commands=['panel'])
 def admin_panel(message):
     if message.from_user.id == ADMIN_ID:
-        msg = f"⚙️ **কন্ট্রোল প্যানেল:**\n\nবট চালু আছে
+        msg = f"⚙️ কন্ট্রোল প্যানেল:\n\nবট চালু আছে।\nডেভলপার: {DEVELOPER_NAME}\nইউনিক নাম সংখ্যা: {len(USED_NAMES)}"
+        bot.reply_to(message, msg)
+    else:
+        bot.reply_to(message, "❌ আপনি এই বটের অ্যাডমিন নন!")
+
+# ⑤. মেইন মেসেজ হ্যান্ডলার
+@bot.message_handler(func=lambda message: True)
+def handle_all_messages(message):
+    user_input = message.text.strip()
+    country_input = user_input.lower()
+    
+    if country_input in COUNTRY_DETAILS:
+        details = COUNTRY_DETAILS[country_input]
+        user_tg_username = message.from_user.username
+        tg_mention = f"@{user_tg_username}" if user_tg_username else "Not Available"
+
+        try:
+            if details['is_bd']:
+                full_name = generate_unique_bd_name()
+            else:
+                fake = Faker(details['locale'])
+                full_name = clean_to_english(fake.name_male())
+                USED_NAMES.add(full_name)
+            
+            clean_name = re.sub(r'[^a-zA-Z0-9]', '', full_name).lower()
+            random_num = random.randint(1000, 9999) 
+            username = f"{clean_name}{random_num}"
+            email = f"{clean_name}{random_num}@gmail.com"
+            phone = generate_fake_phone(details['code'], details['digits'])
+            
+            # সিঙ্গেল লাইনে সাজানো টেক্সট, যেন কোনো ইনডেন্টেশন বা সিনট্যাক্স এরর না হয়
+            line1 = f"👤 Developer: {DEVELOPER_NAME}\n🆔 Your Telegram: {tg_mention}\n🌍 দেশ: {user_input.capitalize()}\n"
+            line2 = f"━━━━━━━━━━━━━━━━━━━━\n👤 নাম (Boy): `{full_name}`\n🆔 ইউজারনেম: `{username}`\n"
+            line3 = f"📧 জিমেইল: `{email}`\n📞 ফোন: `{phone}`\n━━━━━━━━━━━━━━━━━━━━\n"
+            line4 = f"💡 তথ্যের ওপর ট্যাপ করলেই অটো-কপি হয়ে যাবে।"
+            
+            response = line1 + line2 + line3 + line4
+            bot.reply_to(message, response, parse_mode="Markdown")
+        except Exception as e:
+            bot.reply_to(message, "⚠️ দুঃখিত, প্রোফাইল ডাটা জেনারেট করা সম্ভব হয়নি।")
+    else:
+        bot.reply_to(message, "⚠️ দুঃখিত, এটি কোনো সঠিক দেশের নাম নয়।\n\nযেমন লিখুন: Bangladesh, USA বা India")
+
+if __name__ == '__main__':
+    bot.remove_webhook()
+    keep_alive()
+    print("🚀 Profile Generator Bot Engine Started...")
+    bot.infinity_polling()
