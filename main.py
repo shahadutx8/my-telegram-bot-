@@ -222,6 +222,35 @@ def get_total_combinations():
     return max(1, len(get_first_names()) * len(get_last_names()) * len(get_prefixes()))
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Banned Users
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+BANNED_FILE  = "banned_users.json"
+banned_lock  = Lock()
+
+def load_banned() -> dict:
+    if os.path.exists(BANNED_FILE):
+        try:
+            with open(BANNED_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                # keys are stored as strings in JSON; convert back to int
+                return {int(k): v for k, v in data.items()}
+        except Exception:
+            return {}
+    return {}
+
+def save_banned(data: dict):
+    try:
+        with open(BANNED_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+BANNED_USERS: dict = load_banned()   # {user_id(int): {username, first_name, reason, timestamp}}
+
+def is_banned(user_id: int) -> bool:
+    return user_id in BANNED_USERS
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Persistent Used Names
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 USED_NAMES_FILE  = "used_names.json"
@@ -405,6 +434,14 @@ def register_handlers(b: telebot.TeleBot):
 
     @b.message_handler(func=lambda message: True)
     def handle_all_messages(message):
+        # Ban check — reply and stop immediately
+        if is_banned(message.from_user.id):
+            b.reply_to(message,
+                "🚫 আপনাকে এই বট থেকে ব্যান করা হয়েছে।\n"
+                "আপনি আর এই বট ব্যবহার করতে পারবেন না।"
+            )
+            return
+
         country_input = message.text.strip().lower()
         if country_input not in COUNTRY_DETAILS:
             b.reply_to(message,
@@ -649,6 +686,63 @@ def api_name_usage_reset_all():
         USED_NAMES = set()
         save_used_names(USED_NAMES)
     return jsonify(success=True, message='✅ সমস্ত ট্র্যাকিং ডেটা রিসেট হয়েছে!')
+
+# ── Ban / Unban ──────────────────────────────
+@app.route('/api/banned', methods=['GET'])
+@login_required
+def api_banned_list():
+    with banned_lock:
+        data = [
+            {"user_id": uid, **info}
+            for uid, info in BANNED_USERS.items()
+        ]
+    data.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+    return jsonify(entries=data, total=len(data))
+
+@app.route('/api/banned/ban', methods=['POST'])
+@login_required
+def api_ban_user():
+    from datetime import datetime, timezone
+    global BANNED_USERS
+    body     = request.get_json(force=True)
+    try:
+        user_id = int(body.get("user_id", 0))
+    except (TypeError, ValueError):
+        return jsonify(success=False, error="Invalid user_id.")
+    if not user_id:
+        return jsonify(success=False, error="user_id required.")
+    reason   = str(body.get("reason", "")).strip() or "No reason given"
+    username = str(body.get("username", "")).strip()
+    first_name = str(body.get("first_name", "")).strip()
+    with banned_lock:
+        BANNED_USERS[user_id] = {
+            "username":   username,
+            "first_name": first_name,
+            "reason":     reason,
+            "timestamp":  datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+        }
+        save_banned(BANNED_USERS)
+    label = f"@{username}" if username else first_name or str(user_id)
+    return jsonify(success=True, message=f"🚫 {label} ব্যান করা হয়েছে।")
+
+@app.route('/api/banned/unban', methods=['POST'])
+@login_required
+def api_unban_user():
+    global BANNED_USERS
+    body = request.get_json(force=True)
+    try:
+        user_id = int(body.get("user_id", 0))
+    except (TypeError, ValueError):
+        return jsonify(success=False, error="Invalid user_id.")
+    if not user_id:
+        return jsonify(success=False, error="user_id required.")
+    with banned_lock:
+        if user_id not in BANNED_USERS:
+            return jsonify(success=False, error="User is not banned.")
+        info = BANNED_USERS.pop(user_id)
+        save_banned(BANNED_USERS)
+    label = f"@{info.get('username')}" if info.get('username') else info.get('first_name') or str(user_id)
+    return jsonify(success=True, message=f"✅ {label} আনব্যান করা হয়েছে।")
 
 @app.route('/api/names/reset-defaults', methods=['POST'])
 @login_required

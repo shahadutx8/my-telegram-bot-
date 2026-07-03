@@ -141,6 +141,29 @@
     .dot.red   { background: #ff7070; }
     @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.35} }
 
+    /* ── Ban badge / button ── */
+    .ban-btn {
+      background: rgba(239,68,68,0.12); color: #f87171;
+      border: 1px solid rgba(239,68,68,0.3); border-radius: 6px;
+      font-size: 11px; font-weight: 700; padding: 3px 9px;
+      cursor: pointer; transition: all .15s; white-space: nowrap;
+    }
+    .ban-btn:hover { background: rgba(239,68,68,0.28); }
+    .unban-btn {
+      background: rgba(34,197,94,0.12); color: #4ade80;
+      border: 1px solid rgba(34,197,94,0.3); border-radius: 6px;
+      font-size: 11px; font-weight: 700; padding: 3px 9px;
+      cursor: pointer; transition: all .15s; white-space: nowrap;
+    }
+    .unban-btn:hover { background: rgba(34,197,94,0.28); }
+    .banned-badge {
+      display: inline-flex; align-items: center; gap: 4px;
+      background: rgba(239,68,68,0.12); color: #f87171;
+      border: 1px solid rgba(239,68,68,0.25); border-radius: 6px;
+      font-size: 10px; font-weight: 700; padding: 2px 7px;
+    }
+    .reason-cell { font-size: 12px; color: #aaa; max-width: 200px; word-break: break-word; }
+
     /* ── Usage table ── */
     .usage-table { width:100%; border-collapse:collapse; font-size:13px; }
     .usage-table thead tr { background:rgba(255,255,255,0.06); }
@@ -228,6 +251,7 @@
     <button class="tab-btn" onclick="switchTab('generate',this)">⚡ Generate</button>
     <button class="tab-btn" onclick="switchTab('names',this)">📝 Names</button>
     <button class="tab-btn" onclick="switchTab('usage',this)" id="btn-usage">👁️ Usage</button>
+    <button class="tab-btn" onclick="switchTab('banned',this)" id="btn-banned">🚫 Banned</button>
     <button class="tab-btn" onclick="switchTab('log',this)">📜 Log</button>
     <button class="tab-btn" onclick="switchTab('settings',this)">⚙️ Settings</button>
   </div>
@@ -339,6 +363,63 @@
             </tr>
           </thead>
           <tbody id="usage-tbody">
+            <tr><td colspan="6" style="text-align:center;padding:40px;color:#666;">লোড হচ্ছে…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ BANNED TAB ══ -->
+  <div id="tab-banned" class="page">
+
+    <!-- Top bar -->
+    <div class="section" style="padding:16px 22px;margin-bottom:16px;">
+      <div style="display:flex;flex-wrap:wrap;align-items:center;gap:12px;">
+        <div style="flex:1;min-width:200px;">
+          <input type="text" id="banned-search" placeholder="🔍 User ID / @username দিয়ে খুঁজুন…"
+            oninput="bannedSearch()" class="names-input" style="width:100%;padding-left:14px;"/>
+        </div>
+        <span id="banned-count" style="font-size:13px;color:#aaa;white-space:nowrap;"></span>
+      </div>
+    </div>
+
+    <!-- Manual ban form -->
+    <div class="section" style="padding:18px 22px;margin-bottom:16px;">
+      <h3 style="font-size:14px;font-weight:700;margin-bottom:14px;color:#f87171;">🚫 ম্যানুয়ালি ব্যান করুন</h3>
+      <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;">
+        <div style="display:flex;flex-direction:column;gap:4px;">
+          <label style="font-size:11px;color:#888;">Telegram User ID *</label>
+          <input type="number" id="ban-uid-input" placeholder="e.g. 123456789" class="names-input" style="width:180px;"/>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:4px;">
+          <label style="font-size:11px;color:#888;">@Username (optional)</label>
+          <input type="text" id="ban-uname-input" placeholder="@username" class="names-input" style="width:160px;"/>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:4px;flex:1;min-width:160px;">
+          <label style="font-size:11px;color:#888;">কারণ (optional)</label>
+          <input type="text" id="ban-reason-input" placeholder="ব্যানের কারণ লিখুন…" class="names-input"/>
+        </div>
+        <button class="btn" style="background:rgba(239,68,68,0.2);color:#f87171;border:1px solid rgba(239,68,68,0.4);padding:9px 20px;"
+          onclick="banManual()">🚫 ব্যান করো</button>
+      </div>
+    </div>
+
+    <!-- Banned list -->
+    <div class="section" style="padding:0;overflow:hidden;">
+      <div style="overflow-x:auto;">
+        <table class="usage-table" id="banned-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Telegram ইউজার</th>
+              <th>User ID</th>
+              <th>কারণ</th>
+              <th>ব্যান হওয়ার সময়</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="banned-tbody">
             <tr><td colspan="6" style="text-align:center;padding:40px;color:#666;">লোড হচ্ছে…</td></tr>
           </tbody>
         </table>
@@ -518,6 +599,118 @@
 <div id="toast"></div>
 
 <script>
+// ── Ban / Unban ──
+let bannedData = [];
+
+async function loadBanned() {
+  try {
+    const res = await fetch('/api/banned');
+    if (!res.ok) { toast('Banned list লোড ব্যর্থ: ' + res.status, true); return; }
+    const data = await res.json();
+    bannedData = data.entries || [];
+    const cnt = document.getElementById('banned-count');
+    if (cnt) cnt.textContent = `মোট ব্যান: ${data.total} জন`;
+    renderBanned(bannedData);
+  } catch { toast('নেটওয়ার্ক ত্রুটি', true); }
+}
+
+function renderBanned(entries) {
+  const tbody = document.getElementById('banned-tbody');
+  if (!tbody) return;
+  if (!entries.length) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:40px;color:#555;">কোনো ব্যান করা ইউজার নেই।</td></tr>';
+    return;
+  }
+  const fragment = document.createDocumentFragment();
+  entries.forEach((e, i) => {
+    const tr = document.createElement('tr');
+
+    const tdIdx = document.createElement('td'); tdIdx.textContent = i + 1; tr.appendChild(tdIdx);
+
+    const tdUser = document.createElement('td');
+    const userDiv = document.createElement('div'); userDiv.className = 'usage-user';
+    const uname = document.createElement('span'); uname.className = 'uname';
+    uname.textContent = e.username ? '@' + e.username : '—';
+    const ufirst = document.createElement('span'); ufirst.className = 'ufirst';
+    ufirst.textContent = e.first_name || '';
+    userDiv.appendChild(uname); userDiv.appendChild(ufirst); tdUser.appendChild(userDiv); tr.appendChild(tdUser);
+
+    const tdUid = document.createElement('td');
+    const uid = document.createElement('span'); uid.className = 'usage-uid'; uid.textContent = e.user_id;
+    tdUid.appendChild(uid); tr.appendChild(tdUid);
+
+    const tdReason = document.createElement('td'); tdReason.className = 'reason-cell';
+    tdReason.textContent = e.reason || '—'; tr.appendChild(tdReason);
+
+    const tdTime = document.createElement('td'); tdTime.className = 'usage-time';
+    tdTime.textContent = e.timestamp || '—'; tr.appendChild(tdTime);
+
+    const tdAct = document.createElement('td');
+    const unbanBtn = document.createElement('button'); unbanBtn.className = 'unban-btn';
+    unbanBtn.textContent = '✅ আনব্যান';
+    const label = e.username || e.first_name || String(e.user_id);
+    unbanBtn.addEventListener('click', () => unbanUser(e.user_id, label, tr));
+    tdAct.appendChild(unbanBtn); tr.appendChild(tdAct);
+
+    fragment.appendChild(tr);
+  });
+  tbody.innerHTML = '';
+  tbody.appendChild(fragment);
+}
+
+function bannedSearch() {
+  const q = document.getElementById('banned-search').value.trim().toLowerCase();
+  renderBanned(q ? bannedData.filter(e =>
+    String(e.user_id).includes(q) ||
+    (e.username || '').toLowerCase().includes(q) ||
+    (e.first_name || '').toLowerCase().includes(q)
+  ) : bannedData);
+}
+
+async function banUser(user_id, username, first_name, reason, banBtnEl) {
+  const data = await apiPost('/api/banned/ban', { user_id, username, first_name, reason });
+  if (!data) return;
+  if (!data.success) { toast(data.error, true); return; }
+  toast(data.message);
+  // Replace ban btn with "ব্যান্ড" badge
+  if (banBtnEl) {
+    const badge = document.createElement('span');
+    badge.className = 'banned-badge'; badge.textContent = '🚫 ব্যান্ড';
+    banBtnEl.replaceWith(badge);
+  }
+  // Refresh banned tab data in background so it's ready
+  const res = await fetch('/api/banned');
+  if (res.ok) { const d = await res.json(); bannedData = d.entries || []; }
+}
+
+async function unbanUser(user_id, label, rowEl) {
+  if (!confirm(`"${label}" আনব্যান করবেন?`)) return;
+  const data = await apiPost('/api/banned/unban', { user_id });
+  if (!data) return;
+  if (!data.success) { toast(data.error, true); return; }
+  toast(data.message);
+  bannedData = bannedData.filter(e => e.user_id !== user_id);
+  if (rowEl) rowEl.remove();
+  const cnt = document.getElementById('banned-count');
+  if (cnt) cnt.textContent = `মোট ব্যান: ${bannedData.length} জন`;
+}
+
+async function banManual() {
+  const uid_raw = document.getElementById('ban-uid-input').value.trim();
+  const user_id = parseInt(uid_raw);
+  if (!user_id) { toast('Valid User ID দিন', true); return; }
+  const username   = document.getElementById('ban-uname-input').value.replace('@','').trim();
+  const reason     = document.getElementById('ban-reason-input').value.trim();
+  const data = await apiPost('/api/banned/ban', { user_id, username, first_name: '', reason });
+  if (!data) return;
+  if (!data.success) { toast(data.error, true); return; }
+  toast(data.message);
+  document.getElementById('ban-uid-input').value = '';
+  document.getElementById('ban-uname-input').value = '';
+  document.getElementById('ban-reason-input').value = '';
+  loadBanned();
+}
+
 // ── Usage tab ──
 let usageData = [];    // full list from server
 
@@ -599,8 +792,21 @@ function renderUsage(entries) {
     tdTime.textContent = e.timestamp;
     tr.appendChild(tdTime);
 
-    // Delete col
+    // Action col — ban + delete
     const tdDel = document.createElement('td');
+    tdDel.style.whiteSpace = 'nowrap';
+
+    const banBtn = document.createElement('button');
+    banBtn.className = 'ban-btn';
+    banBtn.style.marginRight = '6px';
+    banBtn.textContent = '🚫 ব্যান';
+    banBtn.addEventListener('click', () => {
+      const reason = prompt(`"${e.username || e.first_name || e.user_id}" ব্যানের কারণ (optional):`);
+      if (reason === null) return; // cancelled
+      banUser(e.user_id, e.username, e.first_name, reason, banBtn);
+    });
+    tdDel.appendChild(banBtn);
+
     const delBtn = document.createElement('button');
     delBtn.className = 'usage-del';
     delBtn.title = 'মুছুন';
@@ -750,7 +956,8 @@ function switchTab(name, btn) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   document.getElementById('tab-' + name).classList.add('active');
   btn.classList.add('active');
-  if (name === 'usage') loadUsage();
+  if (name === 'usage')  loadUsage();
+  if (name === 'banned') loadBanned();
 }
 
 // ── Generate Profile ──
