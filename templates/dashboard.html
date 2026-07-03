@@ -141,6 +141,29 @@
     .dot.red   { background: #ff7070; }
     @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.35} }
 
+    /* ── Usage table ── */
+    .usage-table { width:100%; border-collapse:collapse; font-size:13px; }
+    .usage-table thead tr { background:rgba(255,255,255,0.06); }
+    .usage-table th {
+      padding:12px 16px; text-align:left; font-weight:700;
+      color:#a0a0b0; border-bottom:1px solid rgba(255,255,255,0.08);
+      white-space:nowrap;
+    }
+    .usage-table tbody tr { border-bottom:1px solid rgba(255,255,255,0.05); transition:background .15s; }
+    .usage-table tbody tr:hover { background:rgba(255,255,255,0.04); }
+    .usage-table td { padding:11px 16px; vertical-align:middle; }
+    .usage-table td:first-child { color:#555; font-size:11px; }
+    .usage-name { font-weight:700; color:#c4b5fd; }
+    .usage-user { display:flex; flex-direction:column; gap:2px; }
+    .usage-user .uname { font-weight:600; color:#60a5fa; }
+    .usage-user .ufirst { font-size:11px; color:#666; }
+    .usage-uid { font-family:monospace; font-size:11px; color:#888; }
+    .usage-time { font-size:11px; color:#666; white-space:nowrap; }
+    .usage-del { background:none; border:none; cursor:pointer; font-size:16px; opacity:.4; transition:opacity .15s; padding:4px 8px; border-radius:6px; }
+    .usage-del:hover { opacity:1; background:rgba(239,68,68,.15); color:#f87171; }
+    .usage-user-reset { background:none; border:none; cursor:pointer; font-size:11px; color:#60a5fa; opacity:.55; padding:2px 6px; border-radius:4px; transition:opacity .15s; }
+    .usage-user-reset:hover { opacity:1; text-decoration:underline; }
+
     /* ── Names tab ── */
     .names-pill {
       display: inline-flex; align-items: center; gap: 6px;
@@ -204,6 +227,7 @@
     <button class="tab-btn active" onclick="switchTab('home',this)">🏠 Home</button>
     <button class="tab-btn" onclick="switchTab('generate',this)">⚡ Generate</button>
     <button class="tab-btn" onclick="switchTab('names',this)">📝 Names</button>
+    <button class="tab-btn" onclick="switchTab('usage',this)" id="btn-usage">👁️ Usage</button>
     <button class="tab-btn" onclick="switchTab('log',this)">📜 Log</button>
     <button class="tab-btn" onclick="switchTab('settings',this)">⚙️ Settings</button>
   </div>
@@ -278,6 +302,46 @@
       </div>
       <div id="profile-result">
         <div class="profile-grid" id="profile-grid"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ USAGE TAB ══ -->
+  <div id="tab-usage" class="page">
+
+    <!-- Top bar -->
+    <div class="section" style="padding:16px 22px;margin-bottom:16px;">
+      <div style="display:flex;flex-wrap:wrap;align-items:center;gap:12px;">
+        <div style="flex:1;min-width:200px;position:relative;">
+          <input type="text" id="usage-search" placeholder="🔍 নাম / ইউজার / ID দিয়ে খুঁজুন…"
+            oninput="usageSearch()" class="names-input" style="width:100%;padding-left:14px;"/>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <span id="usage-count" style="font-size:13px;color:#aaa;white-space:nowrap;"></span>
+          <button class="btn btn-sm" style="background:rgba(239,68,68,0.15);color:#f87171;border:1px solid rgba(239,68,68,0.3);"
+            onclick="resetAllUsage()">🗑️ সব রিসেট</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Table -->
+    <div class="section" style="padding:0;overflow:hidden;">
+      <div style="overflow-x:auto;">
+        <table class="usage-table" id="usage-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>BD নাম</th>
+              <th>Telegram ইউজার</th>
+              <th>User ID</th>
+              <th>সময়</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="usage-tbody">
+            <tr><td colspan="6" style="text-align:center;padding:40px;color:#666;">লোড হচ্ছে…</td></tr>
+          </tbody>
+        </table>
       </div>
     </div>
   </div>
@@ -454,6 +518,160 @@
 <div id="toast"></div>
 
 <script>
+// ── Usage tab ──
+let usageData = [];    // full list from server
+
+function esc(str) {
+  const d = document.createElement('div');
+  d.textContent = String(str || '');
+  return d.innerHTML;
+}
+
+async function loadUsage() {
+  try {
+    const res = await fetch('/api/name-usage');
+    if (!res.ok) { toast('Usage লোড ব্যর্থ: ' + res.status, true); return; }
+    const data = await res.json();
+    usageData  = data.entries || [];
+    const cnt  = document.getElementById('usage-count');
+    if (cnt) cnt.textContent = `মোট: ${data.total} টি নাম ব্যবহৃত`;
+    renderUsage(usageData);
+  } catch(err) { toast('নেটওয়ার্ক ত্রুটি', true); }
+}
+
+function renderUsage(entries) {
+  const tbody = document.getElementById('usage-tbody');
+  if (!tbody) return;
+  if (!entries.length) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:40px;color:#555;">কোনো তথ্য নেই — এখনো কোনো BD প্রোফাইল জেনারেট হয়নি।</td></tr>';
+    return;
+  }
+  // Build rows safely using DOM — no innerHTML with user data
+  const fragment = document.createDocumentFragment();
+  entries.forEach((e, i) => {
+    const tr = document.createElement('tr');
+
+    // # col
+    const tdIdx = document.createElement('td');
+    tdIdx.textContent = i + 1;
+    tr.appendChild(tdIdx);
+
+    // Name col
+    const tdName = document.createElement('td');
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'usage-name';
+    nameSpan.textContent = e.name;
+    tdName.appendChild(nameSpan);
+    tr.appendChild(tdName);
+
+    // User col
+    const tdUser = document.createElement('td');
+    const userDiv = document.createElement('div');
+    userDiv.className = 'usage-user';
+    const uname = document.createElement('span');
+    uname.className = 'uname';
+    uname.textContent = e.username ? '@' + e.username : '—';
+    const ufirst = document.createElement('span');
+    ufirst.className = 'ufirst';
+    ufirst.textContent = e.first_name || '';
+    userDiv.appendChild(uname);
+    userDiv.appendChild(ufirst);
+    tdUser.appendChild(userDiv);
+    tr.appendChild(tdUser);
+
+    // User ID col
+    const tdUid = document.createElement('td');
+    const uidSpan = document.createElement('span');
+    uidSpan.className = 'usage-uid';
+    uidSpan.textContent = e.user_id;
+    const resetBtn = document.createElement('button');
+    resetBtn.className = 'usage-user-reset';
+    resetBtn.textContent = 'নাম মুক্ত করো';
+    const label = e.username || e.first_name || String(e.user_id);
+    resetBtn.addEventListener('click', () => resetUserUsage(e.user_id, label));
+    tdUid.appendChild(uidSpan);
+    tdUid.appendChild(resetBtn);
+    tr.appendChild(tdUid);
+
+    // Time col
+    const tdTime = document.createElement('td');
+    tdTime.className = 'usage-time';
+    tdTime.textContent = e.timestamp;
+    tr.appendChild(tdTime);
+
+    // Delete col
+    const tdDel = document.createElement('td');
+    const delBtn = document.createElement('button');
+    delBtn.className = 'usage-del';
+    delBtn.title = 'মুছুন';
+    delBtn.textContent = '🗑️';
+    delBtn.addEventListener('click', () => deleteUsageEntry(e.name, tr));
+    tdDel.appendChild(delBtn);
+    tr.appendChild(tdDel);
+
+    fragment.appendChild(tr);
+  });
+  tbody.innerHTML = '';
+  tbody.appendChild(fragment);
+}
+
+function usageSearch() {
+  const q = document.getElementById('usage-search').value.trim().toLowerCase();
+  if (!q) { renderUsage(usageData); return; }
+  renderUsage(usageData.filter(e =>
+    e.name.toLowerCase().includes(q) ||
+    e.username.toLowerCase().includes(q) ||
+    e.first_name.toLowerCase().includes(q) ||
+    String(e.user_id).includes(q)
+  ));
+}
+
+async function apiPost(url, body) {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) { toast(`Server error: ${res.status}`, true); return null; }
+  return await res.json();
+}
+
+async function deleteUsageEntry(name, rowEl) {
+  if (!confirm(`"${name}" মুছে নামটি মুক্ত করবেন?`)) return;
+  const data = await apiPost('/api/name-usage/delete', { name });
+  if (!data) return;
+  if (!data.success) { toast(data.error, true); return; }
+  toast(data.message);
+  rowEl.remove();
+  usageData = usageData.filter(e => e.name !== name);
+  const cnt = document.getElementById('usage-count');
+  if (cnt) cnt.textContent = `মোট: ${usageData.length} টি নাম ব্যবহৃত`;
+}
+
+async function resetUserUsage(user_id, label) {
+  if (!confirm(`"${label}"-এর সব নাম মুছে মুক্ত করবেন?`)) return;
+  const data = await apiPost('/api/name-usage/reset-user', { user_id });
+  if (!data) return;
+  if (!data.success) { toast(data.error, true); return; }
+  toast(data.message);
+  usageData = usageData.filter(e => e.user_id !== user_id);
+  renderUsage(usageData);
+  const cnt = document.getElementById('usage-count');
+  if (cnt) cnt.textContent = `মোট: ${usageData.length} টি নাম ব্যবহৃত`;
+}
+
+async function resetAllUsage() {
+  if (!confirm('সমস্ত ট্র্যাকিং ডেটা মুছে সব BD নাম মুক্ত করবেন?')) return;
+  const data = await apiPost('/api/name-usage/reset-all');
+  if (!data) return;
+  if (!data.success) { toast(data.error, true); return; }
+  toast(data.message);
+  usageData = [];
+  renderUsage([]);
+  const cnt = document.getElementById('usage-count');
+  if (cnt) cnt.textContent = 'মোট: 0 টি নাম ব্যবহৃত';
+}
+
 // ── Names management ──
 async function addNames(kind, inputId) {
   const input = document.getElementById(inputId);
@@ -532,6 +750,7 @@ function switchTab(name, btn) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   document.getElementById('tab-' + name).classList.add('active');
   btn.classList.add('active');
+  if (name === 'usage') loadUsage();
 }
 
 // ── Generate Profile ──

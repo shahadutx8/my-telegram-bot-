@@ -1,6 +1,7 @@
 # Runtime state — never commit these
 config.json
 used_names.json
+name_log.json
 __pycache__/
 *.pyc
 *.pyo

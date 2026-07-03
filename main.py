@@ -224,7 +224,8 @@ def get_total_combinations():
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Persistent Used Names
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-USED_NAMES_FILE = "used_names.json"
+USED_NAMES_FILE  = "used_names.json"
+used_names_lock  = Lock()
 
 def load_used_names():
     if os.path.exists(USED_NAMES_FILE):
@@ -244,26 +245,66 @@ def save_used_names(used: set):
 
 USED_NAMES = load_used_names()
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Name-Usage Log  (who got which BD name + when)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+NAME_LOG_FILE = "name_log.json"
+name_log_lock = Lock()
+
+def load_name_log() -> list:
+    if os.path.exists(NAME_LOG_FILE):
+        try:
+            with open(NAME_LOG_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data if isinstance(data, list) else []
+        except Exception:
+            return []
+    return []
+
+def save_name_log(log: list):
+    try:
+        with open(NAME_LOG_FILE, "w", encoding="utf-8") as f:
+            json.dump(log, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+NAME_LOG: list = load_name_log()
+
+def log_name_usage(bd_name: str, user_id: int, username: str | None, first_name: str | None):
+    """Record which Telegram user received this BD name."""
+    from datetime import datetime, timezone
+    entry = {
+        "name":       bd_name,
+        "user_id":    user_id,
+        "username":   username or "",
+        "first_name": first_name or "",
+        "timestamp":  datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+    }
+    with name_log_lock:
+        NAME_LOG.append(entry)
+        save_name_log(NAME_LOG)
+
 def generate_unique_bd_name():
     global USED_NAMES
-    total = get_total_combinations()
-    if len(USED_NAMES) >= total:
-        USED_NAMES = set()
-        save_used_names(USED_NAMES)
-    attempts = 0
-    while True:
-        prefix    = random.choice(get_prefixes())
-        first     = random.choice(get_first_names())
-        last      = random.choice(get_last_names())
-        full_name = f"{prefix} {first} {last}"
-        attempts += 1
-        if full_name not in USED_NAMES:
-            USED_NAMES.add(full_name)
-            save_used_names(USED_NAMES)
-            return full_name
-        if attempts > total:
+    with used_names_lock:
+        total = get_total_combinations()
+        if len(USED_NAMES) >= total:
             USED_NAMES = set()
             save_used_names(USED_NAMES)
+        attempts = 0
+        while True:
+            prefix    = random.choice(get_prefixes())
+            first     = random.choice(get_first_names())
+            last      = random.choice(get_last_names())
+            full_name = f"{prefix} {first} {last}"
+            attempts += 1
+            if full_name not in USED_NAMES:
+                USED_NAMES.add(full_name)
+                save_used_names(USED_NAMES)
+                return full_name
+            if attempts > total:
+                USED_NAMES = set()
+                save_used_names(USED_NAMES)
 
 def generate_fake_phone(code, pattern):
     return code + "".join(
@@ -374,8 +415,16 @@ def register_handlers(b: telebot.TeleBot):
         try:
             profile = generate_profile(country_input)
             recent_log.append(profile)
-            tg = message.from_user.username
-            tg_mention = f"@{tg}" if tg else "Not Available"
+            tg          = message.from_user.username
+            tg_mention  = f"@{tg}" if tg else "Not Available"
+            # Track who received this BD name
+            if COUNTRY_DETAILS[country_input].get('is_bd'):
+                log_name_usage(
+                    bd_name    = profile['full_name'],
+                    user_id    = message.from_user.id,
+                    username   = message.from_user.username,
+                    first_name = message.from_user.first_name,
+                )
             b.reply_to(message,
                 f"👤 Developer: {DEVELOPER_NAME}\n"
                 f"🆔 Your Telegram: {tg_mention}\n"
@@ -526,6 +575,80 @@ def api_names_delete():
                    total=len(CONFIG[kind]),
                    total_combinations=get_total_combinations(),
                    message=f'🗑️ "{name}" মুছে ফেলা হয়েছে।')
+
+@app.route('/api/name-usage', methods=['GET'])
+@login_required
+def api_name_usage():
+    """Return full name-usage log, newest first."""
+    q = request.args.get('q', '').strip().lower()
+    with name_log_lock:
+        data = list(NAME_LOG)          # copy under lock
+    data.reverse()                     # newest first
+    if q:
+        data = [
+            e for e in data
+            if q in e['name'].lower()
+            or q in e['username'].lower()
+            or q in e['first_name'].lower()
+            or q in str(e['user_id'])
+        ]
+    return jsonify(entries=data, total=len(NAME_LOG))
+
+@app.route('/api/name-usage/delete', methods=['POST'])
+@login_required
+def api_name_usage_delete():
+    """Remove exactly the first matching entry by name+user_id combo, then free the name."""
+    global USED_NAMES
+    data = request.get_json(force=True)
+    name = data.get('name', '').strip()
+    if not name:
+        return jsonify(success=False, error='Name required.')
+    with name_log_lock:
+        idx = next((i for i, e in enumerate(NAME_LOG) if e['name'] == name), None)
+        if idx is None:
+            return jsonify(success=False, error='Entry not found.')
+        NAME_LOG.pop(idx)
+        save_name_log(NAME_LOG)
+    with used_names_lock:
+        USED_NAMES.discard(name)
+        save_used_names(USED_NAMES)
+    return jsonify(success=True, message=f'✅ "{name}" লগ থেকে মুছে নাম মুক্ত করা হয়েছে।')
+
+@app.route('/api/name-usage/reset-user', methods=['POST'])
+@login_required
+def api_name_usage_reset_user():
+    """Remove all entries for one Telegram user_id (frees their names too)."""
+    global USED_NAMES
+    data = request.get_json(force=True)
+    try:
+        user_id = int(data.get('user_id', 0))
+    except (TypeError, ValueError):
+        return jsonify(success=False, error='Invalid user_id.')
+    if not user_id:
+        return jsonify(success=False, error='user_id required.')
+    with name_log_lock:
+        freed = [e['name'] for e in NAME_LOG if e['user_id'] == user_id]
+        NAME_LOG[:] = [e for e in NAME_LOG if e['user_id'] != user_id]
+        save_name_log(NAME_LOG)
+    with used_names_lock:
+        for n in freed:
+            USED_NAMES.discard(n)
+        save_used_names(USED_NAMES)
+    return jsonify(success=True, freed=len(freed),
+                   message=f'✅ এই ইউজারের {len(freed)} টি নাম মুক্ত করা হয়েছে।')
+
+@app.route('/api/name-usage/reset-all', methods=['POST'])
+@login_required
+def api_name_usage_reset_all():
+    """Wipe entire usage log and free all BD names."""
+    global USED_NAMES
+    with name_log_lock:
+        NAME_LOG.clear()
+        save_name_log(NAME_LOG)
+    with used_names_lock:
+        USED_NAMES = set()
+        save_used_names(USED_NAMES)
+    return jsonify(success=True, message='✅ সমস্ত ট্র্যাকিং ডেটা রিসেট হয়েছে!')
 
 @app.route('/api/names/reset-defaults', methods=['POST'])
 @login_required
