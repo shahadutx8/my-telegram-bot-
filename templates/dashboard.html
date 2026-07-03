@@ -535,7 +535,7 @@
       <!-- Multi-pattern section -->
       <div class="form-group" style="margin-bottom:10px;">
         <label style="display:flex;align-items:center;justify-content:space-between;">
-          <span>📱 Digit Patterns (১–৫টি, বট randomly বেছে নেবে) *</span>
+          <span>📱 Digit Patterns (১–১০টি, বট randomly বেছে নেবে) *</span>
           <button type="button" class="btn btn-sm btn-purple" onclick="addPatternRow()" style="padding:4px 12px;font-size:12px;">+ যোগ করুন</button>
         </label>
         <div id="patterns-container" style="display:flex;flex-direction:column;gap:7px;margin-top:8px;">
@@ -1194,8 +1194,8 @@ function renderCountries() {
 // ── Pattern row helpers ──
 function addPatternRow(value = '') {
   const container = document.getElementById('patterns-container');
-  if (container.querySelectorAll('.pattern-row').length >= 5) {
-    toast('সর্বোচ্চ ৫টি pattern যোগ করা যাবে।', true); return;
+  if (container.querySelectorAll('.pattern-row').length >= 10) {
+    toast('সর্বোচ্চ ১০টি pattern যোগ করা যাবে।', true); return;
   }
   const div = document.createElement('div');
   div.className = 'pattern-row';
