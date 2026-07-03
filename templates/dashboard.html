@@ -12,87 +12,92 @@
       font-family: 'Segoe UI', sans-serif;
       color: #fff;
     }
-    /* ── Navbar ── */
     nav {
       display: flex; align-items: center; justify-content: space-between;
-      padding: 18px 32px;
+      padding: 16px 28px;
       background: rgba(255,255,255,0.05);
       border-bottom: 1px solid rgba(255,255,255,0.1);
       position: sticky; top: 0; z-index: 10;
       backdrop-filter: blur(10px);
     }
-    nav .brand { font-size: 20px; font-weight: 700; display: flex; align-items: center; gap: 10px; }
-    nav .actions { display: flex; gap: 10px; }
-    nav a {
-      padding: 8px 18px; border-radius: 8px; text-decoration: none;
-      font-size: 14px; font-weight: 600;
+    nav .brand { font-size: 19px; font-weight: 700; display: flex; align-items: center; gap: 10px; }
+    .tab-bar { display: flex; gap: 4px; }
+    .tab-btn {
+      padding: 8px 18px; border-radius: 8px; font-size: 13px; font-weight: 600;
+      border: none; cursor: pointer; background: transparent; color: #aaa; transition: all 0.2s;
     }
-    .btn-logout { background: rgba(255,80,80,0.18); color: #ff7070; border: 1px solid rgba(255,80,80,0.3); }
-    .btn-logout:hover { background: rgba(255,80,80,0.3); }
+    .tab-btn.active { background: rgba(124,99,245,0.25); color: #c4b5fd; }
+    .tab-btn:hover:not(.active) { background: rgba(255,255,255,0.07); color: #fff; }
+    nav .logout-btn {
+      padding: 8px 16px; border-radius: 8px; text-decoration: none;
+      font-size: 13px; font-weight: 600;
+      background: rgba(255,80,80,0.18); color: #ff7070;
+      border: 1px solid rgba(255,80,80,0.3);
+    }
+    nav .logout-btn:hover { background: rgba(255,80,80,0.3); }
 
-    /* ── Main layout ── */
-    .container { max-width: 1100px; margin: 0 auto; padding: 32px 20px; }
+    .container { max-width: 1100px; margin: 0 auto; padding: 28px 20px; }
+    .page { display: none; }
+    .page.active { display: block; }
 
     /* ── Stat cards ── */
-    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 18px; margin-bottom: 32px; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 16px; margin-bottom: 28px; }
     .stat-card {
       background: rgba(255,255,255,0.07);
       border: 1px solid rgba(255,255,255,0.12);
-      border-radius: 16px; padding: 22px 24px;
-      text-align: center;
+      border-radius: 16px; padding: 20px 22px; text-align: center;
     }
-    .stat-card .icon { font-size: 32px; margin-bottom: 8px; }
-    .stat-card .num { font-size: 28px; font-weight: 700; color: #a78bfa; }
-    .stat-card .label { font-size: 13px; color: #aaa; margin-top: 4px; }
+    .stat-card .icon { font-size: 28px; margin-bottom: 8px; }
+    .stat-card .num { font-size: 26px; font-weight: 700; color: #a78bfa; }
+    .stat-card .label { font-size: 12px; color: #aaa; margin-top: 4px; }
 
-    /* ── Sections ── */
+    /* ── Section ── */
     .section {
       background: rgba(255,255,255,0.05);
       border: 1px solid rgba(255,255,255,0.1);
-      border-radius: 18px; padding: 28px; margin-bottom: 24px;
+      border-radius: 18px; padding: 26px; margin-bottom: 22px;
     }
-    .section h2 { font-size: 17px; font-weight: 700; margin-bottom: 20px; display: flex; align-items: center; gap: 8px; }
+    .section h2 { font-size: 16px; font-weight: 700; margin-bottom: 18px; display: flex; align-items: center; gap: 8px; }
 
     /* ── Generate form ── */
-    .gen-form { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
-    select, .gen-form button {
-      padding: 11px 18px; border-radius: 10px; font-size: 14px; font-weight: 600; border: none; cursor: pointer;
-    }
+    .gen-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
     select {
+      padding: 11px 16px; border-radius: 10px; font-size: 14px; font-weight: 600;
       background: rgba(255,255,255,0.1); color: #fff;
       border: 1px solid rgba(255,255,255,0.2); flex: 1; min-width: 160px;
     }
     select option { background: #302b63; }
-    .btn-generate { background: linear-gradient(90deg, #7c63f5, #5b8dee); color: #fff; }
-    .btn-generate:hover { opacity: 0.88; }
 
-    /* ── Profile result ── */
+    /* ── Buttons ── */
+    .btn {
+      padding: 11px 22px; border-radius: 10px; font-size: 14px; font-weight: 600;
+      border: none; cursor: pointer; transition: opacity 0.2s;
+    }
+    .btn:hover { opacity: 0.82; }
+    .btn-purple { background: linear-gradient(90deg, #7c63f5, #5b8dee); color: #fff; }
+    .btn-red    { background: rgba(255,80,80,0.2); color: #ff7070; border: 1px solid rgba(255,80,80,0.3); }
+    .btn-blue   { background: rgba(90,180,255,0.15); color: #7bcfff; border: 1px solid rgba(90,180,255,0.3); }
+    .btn-green  { background: rgba(0,200,100,0.18); color: #4ade80; border: 1px solid rgba(0,200,100,0.3); }
+    .btn-orange { background: rgba(255,160,50,0.18); color: #fbbf24; border: 1px solid rgba(255,160,50,0.3); }
+    .btn-sm { padding: 8px 16px; font-size: 13px; }
+
+    /* ── Profile grid ── */
     #profile-result { margin-top: 20px; display: none; }
-    .profile-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+    .profile-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
     .profile-field {
       background: rgba(255,255,255,0.07);
       border: 1px solid rgba(255,255,255,0.12);
       border-radius: 12px; padding: 14px 16px;
     }
-    .profile-field .field-label { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 5px; }
-    .profile-field .field-value {
+    .profile-field .f-label { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 5px; }
+    .profile-field .f-value {
       font-size: 14px; font-weight: 600; color: #e0d7ff;
       word-break: break-all; cursor: pointer; user-select: all;
     }
-    .profile-field .field-value:hover { color: #a78bfa; }
-    .copy-hint { font-size: 11px; color: #666; margin-top: 3px; }
+    .profile-field .f-value:hover { color: #a78bfa; }
+    .f-hint { font-size: 11px; color: #555; margin-top: 3px; }
 
-    /* ── Control buttons ── */
-    .controls { display: flex; flex-wrap: wrap; gap: 12px; }
-    .ctrl-btn {
-      padding: 12px 22px; border-radius: 10px; font-size: 14px; font-weight: 600;
-      border: none; cursor: pointer; transition: opacity 0.2s;
-    }
-    .ctrl-btn:hover { opacity: 0.82; }
-    .btn-reset { background: rgba(255,80,80,0.2); color: #ff7070; border: 1px solid rgba(255,80,80,0.3); }
-    .btn-info  { background: rgba(90,180,255,0.15); color: #7bcfff; border: 1px solid rgba(90,180,255,0.3); }
-
-    /* ── Recent log ── */
+    /* ── Log table ── */
     .log-table { width: 100%; border-collapse: collapse; font-size: 13px; }
     .log-table th { text-align: left; padding: 8px 12px; color: #888; font-weight: 600; border-bottom: 1px solid rgba(255,255,255,0.08); }
     .log-table td { padding: 10px 12px; border-bottom: 1px solid rgba(255,255,255,0.05); color: #ddd; }
@@ -101,201 +106,361 @@
     .badge-bd  { background: rgba(0,200,100,0.15); color: #4ade80; border: 1px solid rgba(0,200,100,0.3); }
     .badge-int { background: rgba(90,140,255,0.15); color: #93c5fd; border: 1px solid rgba(90,140,255,0.3); }
 
+    /* ── Settings ── */
+    .settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+    .settings-card {
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 16px; padding: 24px;
+    }
+    .settings-card h3 { font-size: 15px; font-weight: 700; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
+    .form-group { margin-bottom: 14px; }
+    .form-group label { display: block; font-size: 12px; color: #aaa; margin-bottom: 6px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px; }
+    .form-group input {
+      width: 100%; padding: 11px 14px;
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 10px; background: rgba(255,255,255,0.07);
+      color: #fff; font-size: 14px; outline: none; transition: border 0.2s;
+    }
+    .form-group input:focus { border-color: #7c63f5; }
+    .form-group input::placeholder { color: #555; }
+    .form-msg { font-size: 13px; margin-top: 10px; padding: 9px 14px; border-radius: 8px; display: none; }
+    .form-msg.success { background: rgba(0,200,100,0.12); color: #4ade80; border: 1px solid rgba(0,200,100,0.25); }
+    .form-msg.error   { background: rgba(255,80,80,0.12);  color: #ff7070; border: 1px solid rgba(255,80,80,0.25); }
+
+    /* ── Bot status badge ── */
+    .bot-status-row { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+    .status-pill {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 5px 14px; border-radius: 20px; font-size: 13px; font-weight: 700;
+    }
+    .status-pill.online  { background: rgba(0,200,100,0.15); color: #4ade80; border: 1px solid rgba(0,200,100,0.3); }
+    .status-pill.offline { background: rgba(255,80,80,0.15);  color: #ff7070; border: 1px solid rgba(255,80,80,0.3); }
+    .dot { width: 8px; height: 8px; border-radius: 50%; }
+    .dot.green { background: #4ade80; animation: pulse 1.5s infinite; }
+    .dot.red   { background: #ff7070; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.35} }
+
     /* ── Toast ── */
     #toast {
-      position: fixed; bottom: 28px; right: 28px;
-      background: #4ade80; color: #000;
-      padding: 12px 22px; border-radius: 10px;
+      position: fixed; bottom: 24px; right: 24px;
+      padding: 11px 20px; border-radius: 10px;
       font-weight: 700; font-size: 14px;
-      opacity: 0; pointer-events: none;
-      transition: opacity 0.3s;
+      opacity: 0; pointer-events: none; transition: opacity 0.3s;
+      background: #4ade80; color: #000;
     }
     #toast.show { opacity: 1; }
-
-    /* ── Status indicator ── */
-    .status-dot { width: 10px; height: 10px; border-radius: 50%; background: #4ade80; display: inline-block; margin-right: 6px; animation: pulse 1.5s infinite; }
-    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+    #toast.err  { background: #ff7070; color: #fff; }
   </style>
 </head>
 <body>
+
 <nav>
-  <div class="brand">🤖 <span>Profile Bot Dashboard</span></div>
-  <div class="actions">
-    <span style="font-size:13px;color:#aaa;align-self:center"><span class="status-dot"></span>Bot Online</span>
-    <a href="/logout" class="btn-logout">Logout</a>
+  <div class="brand">🤖 Bot Dashboard</div>
+  <div class="tab-bar">
+    <button class="tab-btn active" onclick="switchTab('home',this)">🏠 Home</button>
+    <button class="tab-btn" onclick="switchTab('generate',this)">⚡ Generate</button>
+    <button class="tab-btn" onclick="switchTab('log',this)">📜 Log</button>
+    <button class="tab-btn" onclick="switchTab('settings',this)">⚙️ Settings</button>
   </div>
+  <a href="/logout" class="logout-btn">Logout</a>
 </nav>
 
 <div class="container">
 
-  <!-- Stats -->
-  <div class="stats">
-    <div class="stat-card">
-      <div class="icon">🇧🇩</div>
-      <div class="num">{{ total_combinations | int | format_num }}</div>
-      <div class="label">Total BD Combinations</div>
+  <!-- ══ HOME TAB ══ -->
+  <div id="tab-home" class="page active">
+    <div class="stats">
+      <div class="stat-card">
+        <div class="icon">🇧🇩</div>
+        <div class="num" id="stat-total">{{ total_combinations | int | format_num }}</div>
+        <div class="label">Total BD Combinations</div>
+      </div>
+      <div class="stat-card">
+        <div class="icon">✅</div>
+        <div class="num" id="stat-used">{{ used_count | format_num }}</div>
+        <div class="label">Names Used</div>
+      </div>
+      <div class="stat-card">
+        <div class="icon">⏳</div>
+        <div class="num" id="stat-remaining">{{ remaining | format_num }}</div>
+        <div class="label">Names Remaining</div>
+      </div>
+      <div class="stat-card">
+        <div class="icon">📋</div>
+        <div class="num" id="stat-log">{{ log_count }}</div>
+        <div class="label">Profiles Generated</div>
+      </div>
     </div>
-    <div class="stat-card">
-      <div class="icon">✅</div>
-      <div class="num">{{ used_count | format_num }}</div>
-      <div class="label">Names Used</div>
-    </div>
-    <div class="stat-card">
-      <div class="icon">⏳</div>
-      <div class="num">{{ remaining | format_num }}</div>
-      <div class="label">Names Remaining</div>
-    </div>
-    <div class="stat-card">
-      <div class="icon">📋</div>
-      <div class="num">{{ log_count }}</div>
-      <div class="label">Profiles Generated (session)</div>
+
+    <div class="section">
+      <h2>🤖 Bot Status</h2>
+      <div class="bot-status-row">
+        {% if bot_status.running %}
+        <span class="status-pill online"><span class="dot green"></span>Online</span>
+        <span style="font-size:13px;color:#888">Token: {{ bot_status.token_preview }}</span>
+        {% else %}
+        <span class="status-pill offline"><span class="dot red"></span>Offline</span>
+        <span style="font-size:13px;color:#ff7070">{{ bot_status.error or 'No token set' }}</span>
+        {% endif %}
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <button class="btn btn-blue btn-sm" onclick="refreshStats()">🔄 Refresh Stats</button>
+        <button class="btn btn-red btn-sm" onclick="resetNames()">🗑️ Reset BD Names</button>
+        {% if bot_status.running %}
+        <button class="btn btn-orange btn-sm" onclick="stopBot()">🛑 Stop Bot</button>
+        {% endif %}
+      </div>
+      <p id="home-msg" style="margin-top:12px;font-size:13px;color:#aaa;"></p>
     </div>
   </div>
 
-  <!-- Generate -->
-  <div class="section">
-    <h2>⚡ Generate Profile</h2>
-    <div class="gen-form">
-      <select id="country-select">
-        <option value="bangladesh">🇧🇩 Bangladesh</option>
-        <option value="india">🇮🇳 India</option>
-        <option value="usa">🇺🇸 USA</option>
-        <option value="uk">🇬🇧 UK</option>
-        <option value="canada">🇨🇦 Canada</option>
-        <option value="france">🇫🇷 France</option>
-        <option value="germany">🇩🇪 Germany</option>
-        <option value="japan">🇯🇵 Japan</option>
-      </select>
-      <button class="ctrl-btn btn-generate" onclick="generateProfile()">Generate Profile</button>
-    </div>
-
-    <div id="profile-result">
-      <div class="profile-grid" id="profile-grid"></div>
+  <!-- ══ GENERATE TAB ══ -->
+  <div id="tab-generate" class="page">
+    <div class="section">
+      <h2>⚡ Generate Profile</h2>
+      <div class="gen-row">
+        <select id="country-select">
+          <option value="bangladesh">🇧🇩 Bangladesh</option>
+          <option value="india">🇮🇳 India</option>
+          <option value="usa">🇺🇸 USA</option>
+          <option value="uk">🇬🇧 UK</option>
+          <option value="canada">🇨🇦 Canada</option>
+          <option value="france">🇫🇷 France</option>
+          <option value="germany">🇩🇪 Germany</option>
+          <option value="japan">🇯🇵 Japan</option>
+        </select>
+        <button class="btn btn-purple" onclick="generateProfile()">Generate</button>
+      </div>
+      <div id="profile-result">
+        <div class="profile-grid" id="profile-grid"></div>
+      </div>
     </div>
   </div>
 
-  <!-- Controls -->
-  <div class="section">
-    <h2>🎛️ Bot Controls</h2>
-    <div class="controls">
-      <button class="ctrl-btn btn-reset" onclick="resetNames()">🗑️ Reset Used BD Names</button>
-      <button class="ctrl-btn btn-info"  onclick="refreshStats()">🔄 Refresh Stats</button>
+  <!-- ══ LOG TAB ══ -->
+  <div id="tab-log" class="page">
+    <div class="section">
+      <h2>📜 Recent Profiles</h2>
+      <div id="log-area">
+        {% if recent_log %}
+        <table class="log-table">
+          <thead><tr><th>#</th><th>Country</th><th>Name</th><th>Username</th><th>Email</th><th>Mobile</th></tr></thead>
+          <tbody>
+            {% for entry in recent_log %}
+            <tr>
+              <td style="color:#666">{{ loop.index }}</td>
+              <td><span class="badge {{ 'badge-bd' if entry.country in ['bangladesh','bd'] else 'badge-int' }}">{{ entry.country|capitalize }}</span></td>
+              <td>{{ entry.full_name }}</td>
+              <td>{{ entry.username }}</td>
+              <td>{{ entry.email }}</td>
+              <td>{{ entry.mobile }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <p style="color:#666;font-size:14px;">No profiles generated yet this session.</p>
+        {% endif %}
+      </div>
     </div>
-    <p id="ctrl-msg" style="margin-top:14px;font-size:13px;color:#aaa;"></p>
   </div>
 
-  <!-- Recent log -->
-  <div class="section">
-    <h2>📜 Recent Profiles</h2>
-    <div id="log-area">
-      {% if recent_log %}
-      <table class="log-table">
-        <thead>
-          <tr>
-            <th>#</th><th>Country</th><th>Name</th><th>Username</th><th>Email</th><th>Mobile</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for entry in recent_log %}
-          <tr>
-            <td style="color:#666">{{ loop.revindex }}</td>
-            <td><span class="badge {{ 'badge-bd' if entry.country in ['bangladesh','bd'] else 'badge-int' }}">{{ entry.country|capitalize }}</span></td>
-            <td>{{ entry.full_name }}</td>
-            <td>{{ entry.username }}</td>
-            <td>{{ entry.email }}</td>
-            <td>{{ entry.mobile }}</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-      {% else %}
-      <p style="color:#666;font-size:14px;">No profiles generated yet this session.</p>
-      {% endif %}
+  <!-- ══ SETTINGS TAB ══ -->
+  <div id="tab-settings" class="page">
+    <div class="settings-grid">
+
+      <!-- Bot Token -->
+      <div class="settings-card">
+        <h3>🤖 Telegram Bot Token</h3>
+        <div class="bot-status-row">
+          {% if bot_status.running %}
+          <span class="status-pill online"><span class="dot green"></span>Connected</span>
+          {% else %}
+          <span class="status-pill offline"><span class="dot red"></span>Not Connected</span>
+          {% endif %}
+        </div>
+        <div class="form-group">
+          <label>Bot Token</label>
+          <input type="password" id="bot-token-input" placeholder="1234567890:ABCdef..." autocomplete="off"/>
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          <button class="btn btn-purple" onclick="setBotToken()">✅ Connect Bot</button>
+          {% if bot_status.running %}
+          <button class="btn btn-red" onclick="stopBot()">🛑 Stop Bot</button>
+          {% endif %}
+        </div>
+        <div class="form-msg" id="bot-msg"></div>
+        <p style="font-size:12px;color:#666;margin-top:12px;">Get token from <a href="https://t.me/BotFather" style="color:#7c63f5;" target="_blank">@BotFather</a></p>
+      </div>
+
+      <!-- Change Password -->
+      <div class="settings-card">
+        <h3>🔑 Change Dashboard Password</h3>
+        <div class="form-group">
+          <label>Current Password</label>
+          <input type="password" id="cur-pass" placeholder="Current password" autocomplete="off"/>
+        </div>
+        <div class="form-group">
+          <label>New Password</label>
+          <input type="password" id="new-pass" placeholder="New password (min 6 chars)" autocomplete="new-password"/>
+        </div>
+        <div class="form-group">
+          <label>Confirm New Password</label>
+          <input type="password" id="confirm-pass" placeholder="Repeat new password" autocomplete="new-password"/>
+        </div>
+        <button class="btn btn-green" onclick="changePassword()">🔒 Update Password</button>
+        <div class="form-msg" id="pass-msg"></div>
+      </div>
+
+      <!-- Danger Zone -->
+      <div class="settings-card">
+        <h3>⚠️ Danger Zone</h3>
+        <p style="font-size:13px;color:#aaa;margin-bottom:16px;">Reset all generated BD name records. Cannot be undone.</p>
+        <button class="btn btn-red" onclick="resetNames()">🗑️ Reset All Used Names</button>
+        <div class="form-msg" id="danger-msg"></div>
+      </div>
+
     </div>
   </div>
 
 </div><!-- /container -->
 
-<div id="toast">Copied!</div>
+<div id="toast"></div>
 
 <script>
+// ── Tab switching ──
+function switchTab(name, btn) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  btn.classList.add('active');
+}
+
+// ── Generate Profile ──
 async function generateProfile() {
   const country = document.getElementById('country-select').value;
-  const res = await fetch('/api/generate', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({country})
-  });
+  const res  = await fetch('/api/generate', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({country}) });
   const data = await res.json();
-  if (!data.success) { alert('Error: ' + data.error); return; }
+  if (!data.success) { toast(data.error, true); return; }
 
   const p = data.profile;
   const fields = [
-    {label: 'Withdrawer Name', value: p.full_name},
-    {label: 'Nickname',        value: p.nickname},
-    {label: 'Facebook ID',     value: p.facebook_id},
-    {label: 'Google',          value: p.google},
-    {label: 'WhatsApp',        value: p.whatsapp},
-    {label: 'Email',           value: p.email},
-    {label: 'Mobile',          value: p.mobile},
-    {label: 'Username',        value: p.username},
+    {label:'Withdrawer Name', value: p.full_name},
+    {label:'Nickname',        value: p.nickname},
+    {label:'Facebook ID',     value: p.facebook_id},
+    {label:'Google',          value: p.google},
+    {label:'WhatsApp',        value: p.whatsapp},
+    {label:'Email',           value: p.email},
+    {label:'Mobile',          value: p.mobile},
+    {label:'Username',        value: p.username},
   ];
 
-  const grid = document.getElementById('profile-grid');
-  grid.innerHTML = fields.map(f => `
+  document.getElementById('profile-grid').innerHTML = fields.map(f => `
     <div class="profile-field">
-      <div class="field-label">${f.label}</div>
-      <div class="field-value" onclick="copyText('${f.value}')">${f.value}</div>
-      <div class="copy-hint">Tap to copy</div>
+      <div class="f-label">${f.label}</div>
+      <div class="f-value" onclick="copyText('${f.value}')">${f.value}</div>
+      <div class="f-hint">Tap to copy</div>
     </div>`).join('');
-
   document.getElementById('profile-result').style.display = 'block';
+  appendLog(p);
 
-  // Append to log table
-  appendLog(data.profile);
+  // Update log count stat
+  const logStat = document.getElementById('stat-log');
+  logStat.textContent = (parseInt(logStat.textContent.replace(/,/g,'')) + 1).toLocaleString();
 }
 
 function appendLog(p) {
-  const tbody = document.querySelector('.log-table tbody');
-  const logArea = document.getElementById('log-area');
-
   if (!document.querySelector('.log-table')) {
-    logArea.innerHTML = `<table class="log-table">
-      <thead><tr><th>#</th><th>Country</th><th>Name</th><th>Username</th><th>Email</th><th>Mobile</th></tr></thead>
-      <tbody></tbody></table>`;
+    document.getElementById('log-area').innerHTML =
+      `<table class="log-table"><thead><tr><th>#</th><th>Country</th><th>Name</th><th>Username</th><th>Email</th><th>Mobile</th></tr></thead><tbody></tbody></table>`;
   }
-
-  const tr = document.createElement('tr');
-  const badgeClass = ['bangladesh','bd'].includes(p.country) ? 'badge-bd' : 'badge-int';
+  const badgeCls = ['bangladesh','bd'].includes(p.country) ? 'badge-bd' : 'badge-int';
   const rows = document.querySelectorAll('.log-table tbody tr').length + 1;
+  const tr = document.createElement('tr');
   tr.innerHTML = `<td style="color:#666">${rows}</td>
-    <td><span class="badge ${badgeClass}">${p.country.charAt(0).toUpperCase()+p.country.slice(1)}</span></td>
+    <td><span class="badge ${badgeCls}">${p.country.charAt(0).toUpperCase()+p.country.slice(1)}</span></td>
     <td>${p.full_name}</td><td>${p.username}</td><td>${p.email}</td><td>${p.mobile}</td>`;
   document.querySelector('.log-table tbody').prepend(tr);
 }
 
-async function resetNames() {
-  if (!confirm('এই সেশনের সমস্ত ব্যবহৃত BD নাম রিসেট করবেন?')) return;
-  const res = await fetch('/api/reset', {method:'POST'});
+// ── Bot Token ──
+async function setBotToken() {
+  const token = document.getElementById('bot-token-input').value.trim();
+  if (!token) { showMsg('bot-msg', 'Please enter a token.', true); return; }
+  showMsg('bot-msg', 'Connecting...', false, '#aaa');
+  const res  = await fetch('/api/set-bot-token', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({token}) });
   const data = await res.json();
-  document.getElementById('ctrl-msg').textContent = data.message;
+  showMsg('bot-msg', data.message || data.error, !data.success);
+  if (data.success) {
+    document.getElementById('bot-token-input').value = '';
+    toast('Bot connected! 🎉');
+    setTimeout(() => location.reload(), 1500);
+  }
+}
+
+async function stopBot() {
+  const res  = await fetch('/api/stop-bot', { method:'POST' });
+  const data = await res.json();
+  toast(data.message || 'Bot stopped.');
+  setTimeout(() => location.reload(), 1200);
+}
+
+// ── Password change ──
+async function changePassword() {
+  const cur  = document.getElementById('cur-pass').value;
+  const nw   = document.getElementById('new-pass').value;
+  const conf = document.getElementById('confirm-pass').value;
+  if (nw !== conf) { showMsg('pass-msg', 'Passwords do not match.', true); return; }
+  if (nw.length < 6) { showMsg('pass-msg', 'Minimum 6 characters.', true); return; }
+  const res  = await fetch('/api/change-password', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({current: cur, new: nw}) });
+  const data = await res.json();
+  showMsg('pass-msg', data.message || data.error, !data.success);
+  if (data.success) {
+    toast('Password updated! Logging out...');
+    setTimeout(() => window.location.href = '/logout', 2000);
+  }
+}
+
+// ── Reset names ──
+async function resetNames() {
+  if (!confirm('সমস্ত ব্যবহৃত BD নাম রিসেট করবেন?')) return;
+  const res  = await fetch('/api/reset', { method:'POST' });
+  const data = await res.json();
+  showMsg('danger-msg', data.message, false);
+  document.getElementById('home-msg').textContent = data.message;
+  toast('Names reset ✓');
   refreshStats();
 }
 
+// ── Refresh stats ──
 async function refreshStats() {
-  const res = await fetch('/api/stats');
+  const res  = await fetch('/api/stats');
   const data = await res.json();
-  document.querySelectorAll('.stat-card .num')[1].textContent = data.used_count.toLocaleString();
-  document.querySelectorAll('.stat-card .num')[2].textContent = data.remaining.toLocaleString();
-  document.getElementById('ctrl-msg').textContent = 'Stats refreshed ✓';
+  document.getElementById('stat-used').textContent      = data.used_count.toLocaleString();
+  document.getElementById('stat-remaining').textContent = data.remaining.toLocaleString();
+  document.getElementById('stat-log').textContent       = data.log_count.toLocaleString();
+  document.getElementById('home-msg').textContent = 'Stats refreshed ✓';
 }
 
+// ── Helpers ──
 function copyText(text) {
-  navigator.clipboard.writeText(text).then(() => {
-    const t = document.getElementById('toast');
-    t.classList.add('show');
-    setTimeout(() => t.classList.remove('show'), 2000);
-  });
+  navigator.clipboard.writeText(text).then(() => toast('Copied! ✓'));
+}
+
+function showMsg(id, text, isError, color) {
+  const el = document.getElementById(id);
+  el.textContent = text;
+  el.className   = 'form-msg ' + (isError ? 'error' : 'success');
+  if (color) el.style.color = color;
+  el.style.display = 'block';
+}
+
+function toast(msg, isErr) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className   = 'show' + (isErr ? ' err' : '');
+  setTimeout(() => t.className = '', 2500);
 }
 </script>
 </body>
