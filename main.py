@@ -25,21 +25,58 @@ def _hash_password(password: str) -> str:
 
 NAMES_DEFAULT_FILE = "names_default.json"
 
+# Minimal emergency fallback — used only when names_default.json is missing or corrupt.
+_EMERGENCY_DEFAULTS: dict = {
+    "bd_first_names": ["Md"],
+    "bd_last_names":  ["Rahman"],
+    "bd_prefixes":    ["Md."],
+}
+
 def load_name_defaults() -> dict:
-    """Load default name lists from names_default.json (managed outside main.py)."""
+    """Load and validate default name lists from names_default.json.
+
+    Returns a dict with keys bd_first_names, bd_last_names, bd_prefixes.
+    Each value is guaranteed to be a non-empty list of non-empty strings.
+    Falls back to _EMERGENCY_DEFAULTS (and prints a warning) on any error.
+    """
+    def _valid_str_list(val) -> bool:
+        return (
+            isinstance(val, list)
+            and len(val) > 0
+            and all(isinstance(s, str) and s.strip() for s in val)
+        )
+
     try:
         with open(NAMES_DEFAULT_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-            return {
-                "bd_first_names": data.get("bd_first_names", []),
-                "bd_last_names":  data.get("bd_last_names", []),
-                "bd_prefixes":    data.get("bd_prefixes", []),
-            }
+
+        result = {}
+        for key in ("bd_first_names", "bd_last_names", "bd_prefixes"):
+            val = data.get(key)
+            if not _valid_str_list(val):
+                raise ValueError(
+                    f"'{key}' in {NAMES_DEFAULT_FILE} must be a non-empty list of strings"
+                )
+            result[key] = val
+        return result
+
     except Exception as e:
-        print(f"⚠️  Could not load {NAMES_DEFAULT_FILE}: {e}")
-        return {"bd_first_names": [], "bd_last_names": [], "bd_prefixes": []}
+        print(f"⚠️  Could not load {NAMES_DEFAULT_FILE}: {e} — using emergency defaults.")
+        return {k: v[:] for k, v in _EMERGENCY_DEFAULTS.items()}
 
 NAME_DEFAULTS = load_name_defaults()
+
+# Fail fast at startup if we are stuck with the emergency defaults and the file
+# is simply absent (common misconfiguration), so the operator notices immediately.
+if NAME_DEFAULTS == {k: v[:] for k, v in _EMERGENCY_DEFAULTS.items()}:
+    import warnings
+    warnings.warn(
+        f"{NAMES_DEFAULT_FILE} could not be loaded — "
+        "name generation will be severely limited. "
+        "Provide a valid names_default.json to restore full functionality.",
+        RuntimeWarning,
+        stacklevel=1,
+    )
 
 def load_config():
     defaults = {
@@ -723,12 +760,14 @@ def api_unban_user():
 def api_names_reset_defaults():
     data = request.get_json(force=True)
     kind = data.get('kind', '')
+    if kind not in ('bd_first_names', 'bd_last_names', 'bd_prefixes'):
+        return jsonify(success=False, error='Invalid list type.')
     # Reload from file each time so changes to names_default.json take effect
     fresh_defaults = load_name_defaults()
-    if kind in ('bd_first_names', 'bd_last_names', 'bd_prefixes'):
-        CONFIG[kind] = fresh_defaults.get(kind, [])[:]
-    else:
-        return jsonify(success=False, error='Invalid list type.')
+    new_list = fresh_defaults.get(kind, [])
+    if not new_list:
+        return jsonify(success=False, error=f'Could not load defaults from {NAMES_DEFAULT_FILE}.')
+    CONFIG[kind] = new_list[:]
     save_config(CONFIG)
     return jsonify(success=True,
                    total=len(CONFIG[kind]),
