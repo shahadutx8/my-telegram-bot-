@@ -23,8 +23,57 @@ def _hash_password(password: str) -> str:
     salt = "bot_dashboard_salt_v1"
     return hashlib.sha256(f"{salt}{password}".encode()).hexdigest()
 
+DEFAULT_FIRST_NAMES = [
+    "Arif", "Sajid", "Tanvir", "Fahim", "Rifat", "Mehedi", "Asif", "Sabbir",
+    "Nayeem", "Imran", "Sohan", "Tamim", "Emon", "Shakil", "Rony", "Hasan",
+    "Rakib", "Anik", "Alamin", "Rashed", "Zubair", "Rayhan", "Siam", "Abir",
+    "Arafat", "Jahid", "Riyad", "Sourav", "Ashik", "Akash", "Sagar", "Joy",
+    "Rahat", "Sohel", "Mizan", "Kamrul", "Farhan", "Shafiq", "Rezaul", "Belal",
+    "Tariq", "Nazmul", "Shahin", "Mahbub", "Hasnat", "Zahid", "Touhid", "Nurul",
+    "Ripon", "Shahriar", "Minhaj", "Arman", "Shaon", "Sumon", "Liton", "Babu",
+    "Tushar", "Palash", "Jewel", "Karim", "Rokon", "Jony", "Hridoy", "Sagor",
+    "Robin", "Ratul", "Pavel", "Tanveer", "Nafiz", "Tahmid", "Imon", "Adnan",
+    "Masud", "Robiul", "Shohag", "Babul", "Dulal", "Mithu", "Rubel",
+    "Riaz", "Sirajul", "Alamgir", "Mintu", "Shamsul", "Masum", "Wahid", "Rasel",
+    "Saiful", "Tomal", "Nirob", "Redwan", "Jabed", "Kawsar", "Mahfuz", "Ismail",
+    "Faisal", "Morshed", "Shorif", "Habib", "Farid", "Mamun", "Billal", "Ahad",
+    "Salman", "Samiul", "Yasin", "Iqbal", "Motiur", "Saddam", "Alam", "Badal",
+    "Mainul", "Mostafa", "Abul", "Shafiul", "Tarikul", "Atikur",
+    "Golam", "Delwar", "Jalal", "Khairul", "Obaidul", "Lutfur", "Nazrul",
+    "Rashidul", "Mujibur", "Forhad", "Anwar", "Ashraful", "Khaled", "Murad",
+    "Bazlur", "Azizul", "Nasrul", "Tajul", "Shajahan", "Enayet", "Hafizur",
+    "Quamrul", "Jahangir", "Faruk", "Feroz", "Haroon", "Idris", "Jakir",
+    "Kamal", "Lokman", "Monir", "Nadir", "Omar", "Parvez", "Quader", "Rabiul",
+    "Sultan", "Titu", "Umar", "Wasim", "Yusuf", "Zahirul", "Abubakar",
+    "Biplob", "Chanchal", "Deepu", "Emdad", "Fuad", "Gulzar", "Hanif",
+    "Jasim", "Khalid", "Liaquat", "Minhazul", "Nasim", "Obaid", "Prodip", "Rafiq",
+    "Sajjad", "Tarek", "Ujjal", "Yeakub", "Ziaul",
+]
+DEFAULT_LAST_NAMES = [
+    "Rahman", "Hasan", "Ahmed", "Faisal", "Hossain", "Islam", "Iqbal", "Chowdhury",
+    "Khan", "Ali", "Uddin", "Sarker", "Miah", "Bhuiyan", "Sheikh", "Talukder",
+    "Biswas", "Siddique", "Zaman", "Saha", "Rana", "Howlader", "Haq", "Haque",
+    "Mia", "Mollick", "Mondal", "Munshi", "Nath", "Patwary", "Prodhan", "Quazi",
+    "Roy", "Shikder", "Thakur", "Bepari", "Dewan", "Farazi", "Gazi", "Haldar",
+    "Joardar", "Kazi", "Laskar", "Majumder", "Nawab", "Pandit", "Reza", "Tarafder",
+    "Molla", "Akand", "Banik", "Das", "Gain", "Halder", "Karmakar", "Naskar",
+    "Palodhi", "Sikdar", "Bakshi", "Chakraborty", "Datta", "Ghosh", "Mandal",
+    "Podder", "Raha", "Samaddar", "Ganguly", "Bose", "Sen", "Nandi", "Dey",
+    "Choudhury", "Matin", "Karim", "Amin", "Aziz", "Bashar", "Habib", "Jamil",
+    "Kabir", "Latif", "Mazid", "Noor", "Osman", "Quasem", "Sabur", "Taher",
+    "Wahab", "Yousuf", "Zahir", "Abedin", "Bari", "Hussain", "Rashid", "Sattar",
+    "Mannan", "Momen", "Samad", "Khondker", "Morshed", "Huda", "Anwar", "Faruq",
+    "Gaffar", "Harun", "Kashem", "Mafizur", "Nizam", "Quddus", "Rahim", "Salam",
+]
+DEFAULT_PREFIXES = ["Md.", "Mohammad", "Mohammed", "Md", "M."]
+
 def load_config():
-    defaults = {"bot_token": "", "password_hash": ""}
+    defaults = {
+        "bot_token": "", "password_hash": "",
+        "bd_first_names": DEFAULT_FIRST_NAMES[:],
+        "bd_last_names":  DEFAULT_LAST_NAMES[:],
+        "bd_prefixes":    DEFAULT_PREFIXES[:],
+    }
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
@@ -163,55 +212,14 @@ COUNTRY_DETAILS = {
     'japan':      {'locale': 'ja_JP', 'code': '+81',  'digits': 'XXXXXXXXXX', 'is_bd': False},
 }
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# BD Names
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-BD_FIRST_NAMES = [
-    "Arif", "Sajid", "Tanvir", "Fahim", "Rifat", "Mehedi", "Asif", "Sabbir",
-    "Nayeem", "Imran", "Sohan", "Tamim", "Emon", "Shakil", "Rony", "Hasan",
-    "Rakib", "Anik", "Alamin", "Rashed", "Zubair", "Rayhan", "Siam", "Abir",
-    "Arafat", "Jahid", "Riyad", "Sourav", "Ashik", "Akash", "Sagar", "Joy",
-    "Rahat", "Sohel", "Mizan", "Kamrul", "Farhan", "Shafiq", "Rezaul", "Belal",
-    "Tariq", "Nazmul", "Shahin", "Mahbub", "Hasnat", "Zahid", "Touhid", "Nurul",
-    "Ripon", "Shahriar", "Minhaj", "Arman", "Shaon", "Sumon", "Liton", "Babu",
-    "Tushar", "Palash", "Jewel", "Karim", "Rokon", "Jony", "Hridoy", "Sagor",
-    "Robin", "Ratul", "Pavel", "Tanveer", "Nafiz", "Tahmid", "Imon", "Adnan",
-    "Masud", "Robiul", "Shohag", "Babul", "Dulal", "Mithu", "Rubel",
-    "Riaz", "Sirajul", "Alamgir", "Mintu", "Shamsul", "Masum", "Wahid", "Rasel",
-    "Saiful", "Tomal", "Nirob", "Redwan", "Jabed", "Kawsar", "Mahfuz", "Ismail",
-    "Faisal", "Morshed", "Shorif", "Habib", "Farid", "Mamun", "Billal", "Ahad",
-    "Salman", "Samiul", "Yasin", "Iqbal", "Motiur", "Saddam", "Alam", "Badal",
-    "Mainul", "Mostafa", "Abul", "Shafiul", "Tarikul", "Atikur",
-    "Golam", "Delwar", "Jalal", "Khairul", "Obaidul", "Lutfur", "Nazrul",
-    "Rashidul", "Mujibur", "Forhad", "Anwar", "Ashraful", "Khaled", "Murad",
-    "Bazlur", "Azizul", "Nasrul", "Tajul", "Shajahan", "Enayet", "Hafizur",
-    "Quamrul", "Jahangir", "Faruk", "Feroz", "Haroon", "Idris", "Jakir",
-    "Kamal", "Lokman", "Monir", "Nadir", "Omar", "Parvez", "Quader", "Rabiul",
-    "Sultan", "Titu", "Umar", "Wasim", "Yusuf", "Zahirul", "Abubakar",
-    "Biplob", "Chanchal", "Deepu", "Emdad", "Fuad", "Gulzar", "Hanif",
-    "Jasim", "Khalid", "Liaquat", "Minhazul", "Nasim", "Obaid", "Prodip", "Rafiq",
-    "Sajjad", "Tarek", "Ujjal", "Yeakub", "Ziaul",
-]
-
-BD_LAST_NAMES = [
-    "Rahman", "Hasan", "Ahmed", "Faisal", "Hossain", "Islam", "Iqbal", "Chowdhury",
-    "Khan", "Ali", "Uddin", "Sarker", "Miah", "Bhuiyan", "Sheikh", "Talukder",
-    "Biswas", "Siddique", "Zaman", "Saha", "Rana", "Howlader", "Haq", "Haque",
-    "Mia", "Mollick", "Mondal", "Munshi", "Nath", "Patwary", "Prodhan", "Quazi",
-    "Roy", "Shikder", "Thakur", "Bepari", "Dewan", "Farazi", "Gazi", "Haldar",
-    "Joardar", "Kazi", "Laskar", "Majumder", "Nawab", "Pandit", "Reza", "Tarafder",
-    "Molla", "Akand", "Banik", "Das", "Gain", "Halder", "Karmakar", "Naskar",
-    "Palodhi", "Sikdar", "Bakshi", "Chakraborty", "Datta", "Ghosh", "Mandal",
-    "Podder", "Raha", "Samaddar", "Ganguly", "Bose", "Sen", "Nandi", "Dey",
-    "Choudhury", "Matin", "Karim", "Amin", "Aziz", "Bashar", "Habib", "Jamil",
-    "Kabir", "Latif", "Mazid", "Noor", "Osman", "Quasem", "Sabur", "Taher",
-    "Wahab", "Yousuf", "Zahir", "Abedin", "Bari", "Hussain", "Rashid", "Sattar",
-    "Mannan", "Momen", "Samad", "Khondker", "Morshed", "Huda", "Anwar", "Faruq",
-    "Gaffar", "Harun", "Kashem", "Mafizur", "Nizam", "Quddus", "Rahim", "Salam",
-]
-
-BD_PREFIXES  = ["Md.", "Mohammad", "Mohammed", "Md", "M."]
 NICKNAME_SFX = ["07", "Official", "Gamer", "Pro", "Boss", "Real", "King", "BD", "X", ""]
+
+# ── Dynamic name-list accessors (always read from CONFIG) ──
+def get_first_names(): return CONFIG.get("bd_first_names", DEFAULT_FIRST_NAMES)
+def get_last_names():  return CONFIG.get("bd_last_names",  DEFAULT_LAST_NAMES)
+def get_prefixes():    return CONFIG.get("bd_prefixes",    DEFAULT_PREFIXES)
+def get_total_combinations():
+    return max(1, len(get_first_names()) * len(get_last_names()) * len(get_prefixes()))
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Persistent Used Names
@@ -235,25 +243,25 @@ def save_used_names(used: set):
         pass
 
 USED_NAMES = load_used_names()
-TOTAL_COMBINATIONS = len(BD_PREFIXES) * len(BD_FIRST_NAMES) * len(BD_LAST_NAMES)
 
 def generate_unique_bd_name():
     global USED_NAMES
-    if len(USED_NAMES) >= TOTAL_COMBINATIONS:
+    total = get_total_combinations()
+    if len(USED_NAMES) >= total:
         USED_NAMES = set()
         save_used_names(USED_NAMES)
     attempts = 0
     while True:
-        prefix    = random.choice(BD_PREFIXES)
-        first     = random.choice(BD_FIRST_NAMES)
-        last      = random.choice(BD_LAST_NAMES)
+        prefix    = random.choice(get_prefixes())
+        first     = random.choice(get_first_names())
+        last      = random.choice(get_last_names())
         full_name = f"{prefix} {first} {last}"
         attempts += 1
         if full_name not in USED_NAMES:
             USED_NAMES.add(full_name)
             save_used_names(USED_NAMES)
             return full_name
-        if attempts > TOTAL_COMBINATIONS:
+        if attempts > total:
             USED_NAMES = set()
             save_used_names(USED_NAMES)
 
@@ -318,7 +326,7 @@ def register_handlers(b: telebot.TeleBot):
     @b.message_handler(commands=['start'])
     def send_welcome(message):
         used_count = len(USED_NAMES)
-        remaining  = TOTAL_COMBINATIONS - used_count
+        remaining  = get_total_combinations() - used_count
         b.reply_to(message,
             "👋 ফেক প্রোফাইল জেনারেটর বটে স্বাগতম!\n\n"
             "যেকোনো দেশের নাম লিখুন:\n"
@@ -332,13 +340,14 @@ def register_handlers(b: telebot.TeleBot):
     @b.message_handler(commands=['panel'])
     def admin_panel(message):
         if message.from_user.id == ADMIN_ID:
+            total = get_total_combinations()
             b.reply_to(message,
                 f"⚙️ কন্ট্রোল প্যানেল:\n\n"
                 f"বট চালু আছে ✅\n"
                 f"ডেভলপার: {DEVELOPER_NAME}\n"
-                f"মোট সম্ভাব্য নাম: {TOTAL_COMBINATIONS:,}\n"
+                f"মোট সম্ভাব্য নাম: {total:,}\n"
                 f"ব্যবহৃত নাম: {len(USED_NAMES):,}\n"
-                f"বাকি নাম: {TOTAL_COMBINATIONS - len(USED_NAMES):,}"
+                f"বাকি নাম: {total - len(USED_NAMES):,}"
             )
         else:
             b.reply_to(message, "❌ আপনি এই বটের অ্যাডমিন নন!")
@@ -414,15 +423,19 @@ def logout():
 @app.route('/dashboard')
 @login_required
 def dashboard():
+    total = get_total_combinations()
     return render_template(
         'dashboard.html',
-        total_combinations=TOTAL_COMBINATIONS,
+        total_combinations=total,
         used_count=len(USED_NAMES),
-        remaining=TOTAL_COMBINATIONS - len(USED_NAMES),
+        remaining=total - len(USED_NAMES),
         recent_log=list(recent_log)[-20:][::-1],
         log_count=len(recent_log),
         bot_status=bot_status,
         bot_token_saved=bool(CONFIG.get("bot_token", "").strip()),
+        first_names=sorted(get_first_names()),
+        last_names=sorted(get_last_names()),
+        prefixes=get_prefixes(),
     )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -450,14 +463,88 @@ def api_reset():
 @app.route('/api/stats')
 @login_required
 def api_stats():
+    total = get_total_combinations()
     return jsonify(
-        total_combinations=TOTAL_COMBINATIONS,
+        total_combinations=total,
         used_count=len(USED_NAMES),
-        remaining=TOTAL_COMBINATIONS - len(USED_NAMES),
+        remaining=total - len(USED_NAMES),
         log_count=len(recent_log),
         bot_running=bot_status["running"],
         bot_error=bot_status["error"],
+        first_count=len(get_first_names()),
+        last_count=len(get_last_names()),
+        prefix_count=len(get_prefixes()),
     )
+
+@app.route('/api/names', methods=['GET'])
+@login_required
+def api_names_get():
+    return jsonify(
+        bd_first_names=sorted(get_first_names()),
+        bd_last_names=sorted(get_last_names()),
+        bd_prefixes=get_prefixes(),
+        total_combinations=get_total_combinations(),
+    )
+
+@app.route('/api/names/add', methods=['POST'])
+@login_required
+def api_names_add():
+    data  = request.get_json(force=True)
+    kind  = data.get('kind', '')
+    names = [n.strip().title() for n in data.get('names', []) if n.strip()]
+    if kind not in ('bd_first_names', 'bd_last_names', 'bd_prefixes'):
+        return jsonify(success=False, error='Invalid list type.')
+    if not names:
+        return jsonify(success=False, error='No valid names provided.')
+    if kind == 'bd_prefixes':
+        names = [n.strip() for n in data.get('names', []) if n.strip()]  # preserve prefix case
+    existing = set(CONFIG.get(kind, []))
+    added = [n for n in names if n not in existing]
+    CONFIG[kind] = list(existing) + added
+    save_config(CONFIG)
+    return jsonify(success=True, added=len(added),
+                   total=len(CONFIG[kind]),
+                   total_combinations=get_total_combinations(),
+                   message=f'✅ {len(added)} টি নাম যোগ করা হয়েছে!')
+
+@app.route('/api/names/delete', methods=['POST'])
+@login_required
+def api_names_delete():
+    data  = request.get_json(force=True)
+    kind  = data.get('kind', '')
+    name  = data.get('name', '').strip()
+    if kind not in ('bd_first_names', 'bd_last_names', 'bd_prefixes'):
+        return jsonify(success=False, error='Invalid list type.')
+    lst = CONFIG.get(kind, [])
+    if len(lst) <= 1:
+        return jsonify(success=False, error='Cannot delete — list must have at least 1 item.')
+    if name not in lst:
+        return jsonify(success=False, error='Name not found.')
+    CONFIG[kind] = [n for n in lst if n != name]
+    save_config(CONFIG)
+    return jsonify(success=True,
+                   total=len(CONFIG[kind]),
+                   total_combinations=get_total_combinations(),
+                   message=f'🗑️ "{name}" মুছে ফেলা হয়েছে।')
+
+@app.route('/api/names/reset-defaults', methods=['POST'])
+@login_required
+def api_names_reset_defaults():
+    data = request.get_json(force=True)
+    kind = data.get('kind', '')
+    if kind == 'bd_first_names':
+        CONFIG['bd_first_names'] = DEFAULT_FIRST_NAMES[:]
+    elif kind == 'bd_last_names':
+        CONFIG['bd_last_names'] = DEFAULT_LAST_NAMES[:]
+    elif kind == 'bd_prefixes':
+        CONFIG['bd_prefixes'] = DEFAULT_PREFIXES[:]
+    else:
+        return jsonify(success=False, error='Invalid list type.')
+    save_config(CONFIG)
+    return jsonify(success=True,
+                   total=len(CONFIG[kind]),
+                   total_combinations=get_total_combinations(),
+                   message='✅ ডিফল্ট লিস্টে ফিরে যাওয়া হয়েছে!')
 
 @app.route('/api/set-bot-token', methods=['POST'])
 @login_required
@@ -524,7 +611,7 @@ if __name__ == '__main__':
     if saved_token:
         ok, err = launch_bot(saved_token)
         if ok:
-            print(f"🚀 Bot started | মোট সম্ভাব্য BD নাম: {TOTAL_COMBINATIONS:,}")
+            print(f"🚀 Bot started | মোট সম্ভাব্য BD নাম: {get_total_combinations():,}")
         else:
             print(f"⚠️  Bot failed to start: {err}")
     else:

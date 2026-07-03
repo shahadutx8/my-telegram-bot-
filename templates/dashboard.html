@@ -141,6 +141,49 @@
     .dot.red   { background: #ff7070; }
     @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.35} }
 
+    /* ── Names tab ── */
+    .names-pill {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 6px 14px; border-radius: 20px; font-size: 13px;
+      background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.12);
+    }
+    .names-pill.combo { background: rgba(124,99,245,0.18); border-color: rgba(124,99,245,0.35); color: #c4b5fd; }
+    .names-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+    @media(max-width:700px){ .names-grid { grid-template-columns: 1fr; } }
+    .names-card {
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 18px; padding: 22px;
+    }
+    .names-card-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:14px; }
+    .names-card-head h3 { font-size:15px; font-weight:700; }
+    .names-add-row { display:flex; gap:8px; margin-bottom:14px; }
+    .names-input {
+      flex:1; padding:9px 13px; border-radius:9px; font-size:13px;
+      background: rgba(255,255,255,0.08); color:#fff;
+      border: 1px solid rgba(255,255,255,0.18); outline:none;
+    }
+    .names-input:focus { border-color:#7c63f5; }
+    .names-input::placeholder { color:#555; }
+    .names-list {
+      display:flex; flex-wrap:wrap; gap:7px;
+      max-height:320px; overflow-y:auto; padding-right:4px;
+    }
+    .names-list::-webkit-scrollbar { width:4px; }
+    .names-list::-webkit-scrollbar-thumb { background:rgba(255,255,255,0.15); border-radius:4px; }
+    .name-tag {
+      display:inline-flex; align-items:center; gap:5px;
+      padding:5px 10px; border-radius:8px; font-size:12px; font-weight:600;
+      background: rgba(124,99,245,0.15); border:1px solid rgba(124,99,245,0.25);
+      color:#c4b5fd; user-select:none;
+    }
+    .prefix-tag { background:rgba(251,191,36,0.1); border-color:rgba(251,191,36,0.25); color:#fcd34d; }
+    .name-tag button {
+      background:none; border:none; color:inherit; cursor:pointer;
+      font-size:14px; line-height:1; padding:0 2px; opacity:0.5;
+    }
+    .name-tag button:hover { opacity:1; color:#ff7070; }
+
     /* ── Toast ── */
     #toast {
       position: fixed; bottom: 24px; right: 24px;
@@ -160,6 +203,7 @@
   <div class="tab-bar">
     <button class="tab-btn active" onclick="switchTab('home',this)">🏠 Home</button>
     <button class="tab-btn" onclick="switchTab('generate',this)">⚡ Generate</button>
+    <button class="tab-btn" onclick="switchTab('names',this)">📝 Names</button>
     <button class="tab-btn" onclick="switchTab('log',this)">📜 Log</button>
     <button class="tab-btn" onclick="switchTab('settings',this)">⚙️ Settings</button>
   </div>
@@ -236,6 +280,87 @@
         <div class="profile-grid" id="profile-grid"></div>
       </div>
     </div>
+  </div>
+
+  <!-- ══ NAMES TAB ══ -->
+  <div id="tab-names" class="page">
+
+    <!-- Summary bar -->
+    <div class="section" style="padding:18px 26px;margin-bottom:18px;">
+      <div style="display:flex;flex-wrap:wrap;align-items:center;gap:18px;">
+        <div style="display:flex;gap:14px;flex-wrap:wrap;flex:1;">
+          <span class="names-pill" id="pill-first">🔤 First: <strong id="cnt-first">{{ first_names|length }}</strong></span>
+          <span class="names-pill" id="pill-last">🔤 Last: <strong id="cnt-last">{{ last_names|length }}</strong></span>
+          <span class="names-pill" id="pill-prefix">🏷️ Prefix: <strong id="cnt-prefix">{{ prefixes|length }}</strong></span>
+          <span class="names-pill combo">🔢 Combinations: <strong id="cnt-combo">{{ total_combinations | int | format_num }}</strong></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="names-grid">
+
+      <!-- First Names -->
+      <div class="names-card">
+        <div class="names-card-head">
+          <h3>👤 First Names</h3>
+          <div style="display:flex;gap:8px;">
+            <button class="btn btn-sm btn-blue" onclick="resetDefaults('bd_first_names')">↺ Default</button>
+          </div>
+        </div>
+        <div class="names-add-row">
+          <input type="text" id="add-first" placeholder="e.g. Rafiq, Salam, Barek" class="names-input"/>
+          <button class="btn btn-purple btn-sm" onclick="addNames('bd_first_names','add-first')">+ Add</button>
+        </div>
+        <div class="names-list" id="list-first">
+          {% for name in first_names %}
+          <span class="name-tag" data-kind="bd_first_names" data-name="{{ name }}">
+            {{ name }} <button onclick="deleteName('bd_first_names','{{ name }}',this.parentElement)">×</button>
+          </span>
+          {% endfor %}
+        </div>
+      </div>
+
+      <!-- Last Names -->
+      <div class="names-card">
+        <div class="names-card-head">
+          <h3>👥 Last Names</h3>
+          <div style="display:flex;gap:8px;">
+            <button class="btn btn-sm btn-blue" onclick="resetDefaults('bd_last_names')">↺ Default</button>
+          </div>
+        </div>
+        <div class="names-add-row">
+          <input type="text" id="add-last" placeholder="e.g. Mia, Gazi, Talukder" class="names-input"/>
+          <button class="btn btn-purple btn-sm" onclick="addNames('bd_last_names','add-last')">+ Add</button>
+        </div>
+        <div class="names-list" id="list-last">
+          {% for name in last_names %}
+          <span class="name-tag" data-kind="bd_last_names" data-name="{{ name }}">
+            {{ name }} <button onclick="deleteName('bd_last_names','{{ name }}',this.parentElement)">×</button>
+          </span>
+          {% endfor %}
+        </div>
+      </div>
+
+      <!-- Prefixes -->
+      <div class="names-card" style="max-width:360px;">
+        <div class="names-card-head">
+          <h3>🏷️ Prefixes</h3>
+          <button class="btn btn-sm btn-blue" onclick="resetDefaults('bd_prefixes')">↺ Default</button>
+        </div>
+        <div class="names-add-row">
+          <input type="text" id="add-prefix" placeholder="e.g. Md., Al" class="names-input"/>
+          <button class="btn btn-purple btn-sm" onclick="addNames('bd_prefixes','add-prefix')">+ Add</button>
+        </div>
+        <div class="names-list" id="list-prefix">
+          {% for p in prefixes %}
+          <span class="name-tag prefix-tag" data-kind="bd_prefixes" data-name="{{ p }}">
+            {{ p }} <button onclick="deleteName('bd_prefixes','{{ p }}',this.parentElement)">×</button>
+          </span>
+          {% endfor %}
+        </div>
+      </div>
+
+    </div><!-- /names-grid -->
   </div>
 
   <!-- ══ LOG TAB ══ -->
@@ -329,6 +454,78 @@
 <div id="toast"></div>
 
 <script>
+// ── Names management ──
+async function addNames(kind, inputId) {
+  const input = document.getElementById(inputId);
+  const raw   = input.value.trim();
+  if (!raw) return;
+  const names = raw.split(/[,،\n]+/).map(s => s.trim()).filter(Boolean);
+  const res   = await fetch('/api/names/add', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({kind, names})
+  });
+  const data = await res.json();
+  if (!data.success) { toast(data.error, true); return; }
+  input.value = '';
+  toast(data.message);
+  updateCombinations(data.total_combinations);
+  // Append new tags to list
+  const listEl = document.getElementById(kind === 'bd_first_names' ? 'list-first' : kind === 'bd_last_names' ? 'list-last' : 'list-prefix');
+  const cntEl  = document.getElementById(kind === 'bd_first_names' ? 'cnt-first' : kind === 'bd_last_names' ? 'cnt-last' : 'cnt-prefix');
+  cntEl.textContent = data.total;
+  // Re-fetch and re-render list
+  refreshNamesList(kind, listEl, cntEl);
+}
+
+async function deleteName(kind, name, tagEl) {
+  const res  = await fetch('/api/names/delete', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({kind, name})
+  });
+  const data = await res.json();
+  if (!data.success) { toast(data.error, true); return; }
+  tagEl.remove();
+  updateCombinations(data.total_combinations);
+  const cntEl = document.getElementById(kind === 'bd_first_names' ? 'cnt-first' : kind === 'bd_last_names' ? 'cnt-last' : 'cnt-prefix');
+  if (cntEl) cntEl.textContent = data.total;
+  toast(data.message);
+}
+
+async function resetDefaults(kind) {
+  const label = kind === 'bd_first_names' ? 'First Names' : kind === 'bd_last_names' ? 'Last Names' : 'Prefixes';
+  if (!confirm(`${label} ডিফল্টে রিসেট করবেন?`)) return;
+  const res  = await fetch('/api/names/reset-defaults', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({kind})
+  });
+  const data = await res.json();
+  if (!data.success) { toast(data.error, true); return; }
+  toast(data.message);
+  updateCombinations(data.total_combinations);
+  const listEl = document.getElementById(kind === 'bd_first_names' ? 'list-first' : kind === 'bd_last_names' ? 'list-last' : 'list-prefix');
+  const cntEl  = document.getElementById(kind === 'bd_first_names' ? 'cnt-first' : kind === 'bd_last_names' ? 'cnt-last' : 'cnt-prefix');
+  refreshNamesList(kind, listEl, cntEl);
+}
+
+async function refreshNamesList(kind, listEl, cntEl) {
+  const res  = await fetch('/api/names');
+  const data = await res.json();
+  const items = data[kind] || [];
+  cntEl.textContent = items.length;
+  const isPfx = kind === 'bd_prefixes';
+  listEl.innerHTML = items.sort().map(n => `
+    <span class="name-tag${isPfx ? ' prefix-tag' : ''}" data-kind="${kind}" data-name="${n}">
+      ${n} <button onclick="deleteName('${kind}','${n}',this.parentElement)">×</button>
+    </span>`).join('');
+}
+
+function updateCombinations(total) {
+  const el = document.getElementById('cnt-combo');
+  if (el) el.textContent = total.toLocaleString();
+  const stat = document.getElementById('stat-total');
+  if (stat) stat.textContent = total.toLocaleString();
+}
+
 // ── Tab switching ──
 function switchTab(name, btn) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
