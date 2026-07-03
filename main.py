@@ -84,6 +84,23 @@ def load_config():
         "bd_first_names": NAME_DEFAULTS["bd_first_names"][:],
         "bd_last_names":  NAME_DEFAULTS["bd_last_names"][:],
         "bd_prefixes":    NAME_DEFAULTS["bd_prefixes"][:],
+        # Bot identity — managed via dashboard (env vars used as one-time seed)
+        "admin_id":       int(os.environ.get("ADMIN_ID", "0") or "0"),
+        "developer_name": os.environ.get("DEVELOPER_NAME", ""),
+        # Nickname suffixes — managed via dashboard
+        "nickname_sfx": ["07", "Official", "Gamer", "Pro", "Boss", "Real", "King", "BD", "X", ""],
+        # Countries — managed via dashboard
+        "countries": {
+            "bangladesh": {"locale": "en_US", "code": "+880", "digits": "1XXXXXXXXX", "is_bd": True},
+            "bd":         {"locale": "en_US", "code": "+880", "digits": "1XXXXXXXXX", "is_bd": True},
+            "india":      {"locale": "en_IN", "code": "+91",  "digits": "XXXXXXXXXX", "is_bd": False},
+            "usa":        {"locale": "en_US", "code": "+1",   "digits": "XXXXXXXXXX", "is_bd": False},
+            "uk":         {"locale": "en_GB", "code": "+44",  "digits": "XXXXXXXXXX", "is_bd": False},
+            "canada":     {"locale": "en_CA", "code": "+1",   "digits": "XXXXXXXXXX", "is_bd": False},
+            "france":     {"locale": "fr_FR", "code": "+33",  "digits": "XXXXXXXXXX", "is_bd": False},
+            "germany":    {"locale": "de_DE", "code": "+49",  "digits": "XXXXXXXXXX", "is_bd": False},
+            "japan":      {"locale": "ja_JP", "code": "+81",  "digits": "XXXXXXXXXX", "is_bd": False},
+        },
     }
     if os.path.exists(CONFIG_FILE):
         try:
@@ -156,8 +173,7 @@ bot_thread = None
 bot_lock = Lock()
 bot_status = {"running": False, "token_preview": "", "error": ""}
 
-ADMIN_ID = int(os.environ.get("ADMIN_ID", "7170129517"))
-DEVELOPER_NAME = os.environ.get("DEVELOPER_NAME", "Shahadut Hossain")
+# Admin ID and developer name are now stored in config.json and managed via the dashboard.
 
 def make_bot(token: str):
     """Create, validate (via get_me), and return a TeleBot instance, or None on error."""
@@ -209,26 +225,19 @@ def launch_bot(token: str):
         return True, ""
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# Country Config
+# Dynamic config accessors — all read from CONFIG (managed via dashboard API)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-COUNTRY_DETAILS = {
-    'bangladesh': {'locale': 'en_US', 'code': '+880', 'digits': '1XXXXXXXXX', 'is_bd': True},
-    'bd':         {'locale': 'en_US', 'code': '+880', 'digits': '1XXXXXXXXX', 'is_bd': True},
-    'india':      {'locale': 'en_IN', 'code': '+91',  'digits': 'XXXXXXXXXX', 'is_bd': False},
-    'usa':        {'locale': 'en_US', 'code': '+1',   'digits': 'XXXXXXXXXX', 'is_bd': False},
-    'uk':         {'locale': 'en_GB', 'code': '+44',  'digits': 'XXXXXXXXXX', 'is_bd': False},
-    'canada':     {'locale': 'en_CA', 'code': '+1',   'digits': 'XXXXXXXXXX', 'is_bd': False},
-    'france':     {'locale': 'fr_FR', 'code': '+33',  'digits': 'XXXXXXXXXX', 'is_bd': False},
-    'germany':    {'locale': 'de_DE', 'code': '+49',  'digits': 'XXXXXXXXXX', 'is_bd': False},
-    'japan':      {'locale': 'ja_JP', 'code': '+81',  'digits': 'XXXXXXXXXX', 'is_bd': False},
-}
-
-NICKNAME_SFX = ["07", "Official", "Gamer", "Pro", "Boss", "Real", "King", "BD", "X", ""]
-
-# ── Dynamic name-list accessors (always read from CONFIG) ──
-def get_first_names(): return CONFIG.get("bd_first_names", NAME_DEFAULTS["bd_first_names"])
-def get_last_names():  return CONFIG.get("bd_last_names",  NAME_DEFAULTS["bd_last_names"])
-def get_prefixes():    return CONFIG.get("bd_prefixes",    NAME_DEFAULTS["bd_prefixes"])
+def get_first_names():     return CONFIG.get("bd_first_names", NAME_DEFAULTS["bd_first_names"])
+def get_last_names():      return CONFIG.get("bd_last_names",  NAME_DEFAULTS["bd_last_names"])
+def get_prefixes():        return CONFIG.get("bd_prefixes",    NAME_DEFAULTS["bd_prefixes"])
+def get_country_details(): return CONFIG.get("countries", {})
+def get_nickname_sfx():    return CONFIG.get("nickname_sfx", [""])
+def get_admin_id():
+    try:
+        return int(CONFIG.get("admin_id") or 0)
+    except (TypeError, ValueError):
+        return 0
+def get_developer_name():  return CONFIG.get("developer_name", "")
 def get_total_combinations():
     return max(1, len(get_first_names()) * len(get_last_names()) * len(get_prefixes()))
 
@@ -358,9 +367,10 @@ def clean_to_english(text):
     )
 
 def generate_profile(country_key):
-    if country_key not in COUNTRY_DETAILS:
+    country_details = get_country_details()
+    if country_key not in country_details:
         return None
-    details = COUNTRY_DETAILS[country_key]
+    details = country_details[country_key]
 
     if details['is_bd']:
         full_name = generate_unique_bd_name()
@@ -380,7 +390,8 @@ def generate_profile(country_key):
 
     random_num   = random.randint(1000, 9999)
     suffix_num   = random.randint(10, 99)
-    sfx          = random.choice(NICKNAME_SFX)
+    sfx_list     = get_nickname_sfx()
+    sfx          = random.choice(sfx_list) if sfx_list else ""
     nickname     = f"{nick_base.capitalize()}{sfx}" if sfx else nick_base.capitalize()
     username     = f"{clean_name}{random_num}"
     email        = f"{clean_name}{random_num}@gmail.com"
@@ -406,26 +417,25 @@ def register_handlers(b: telebot.TeleBot):
 
     @b.message_handler(commands=['start'])
     def send_welcome(message):
-        used_count = len(USED_NAMES)
-        remaining  = get_total_combinations() - used_count
+        used_count   = len(USED_NAMES)
+        remaining    = get_total_combinations() - used_count
+        country_keys = ", ".join(k.capitalize() for k in get_country_details().keys())
         b.reply_to(message,
             "👋 ফেক প্রোফাইল জেনারেটর বটে স্বাগতম!\n\n"
-            "যেকোনো দেশের নাম লিখুন:\n"
-            "🇧🇩 Bangladesh  🇮🇳 India  🇺🇸 USA\n"
-            "🇬🇧 UK  🇨🇦 Canada  🇫🇷 France\n"
-            "🇩🇪 Germany  🇯🇵 Japan\n\n"
+            f"যেকোনো দেশের নাম লিখুন:\n{country_keys}\n\n"
             f"🇧🇩 এখন পর্যন্ত {used_count:,} টি নাম ব্যবহৃত হয়েছে।\n"
             f"✅ আরও {remaining:,} টি ইউনিক নাম বাকি আছে।"
         )
 
     @b.message_handler(commands=['panel'])
     def admin_panel(message):
-        if message.from_user.id == ADMIN_ID:
+        admin_id = get_admin_id()
+        if admin_id and message.from_user.id == admin_id:
             total = get_total_combinations()
             b.reply_to(message,
                 f"⚙️ কন্ট্রোল প্যানেল:\n\n"
                 f"বট চালু আছে ✅\n"
-                f"ডেভলপার: {DEVELOPER_NAME}\n"
+                f"ডেভলপার: {get_developer_name()}\n"
                 f"মোট সম্ভাব্য নাম: {total:,}\n"
                 f"ব্যবহৃত নাম: {len(USED_NAMES):,}\n"
                 f"বাকি নাম: {total - len(USED_NAMES):,}"
@@ -435,7 +445,8 @@ def register_handlers(b: telebot.TeleBot):
 
     @b.message_handler(commands=['reset'])
     def reset_names(message):
-        if message.from_user.id == ADMIN_ID:
+        admin_id = get_admin_id()
+        if admin_id and message.from_user.id == admin_id:
             global USED_NAMES
             USED_NAMES = set()
             save_used_names(USED_NAMES)
@@ -453,11 +464,13 @@ def register_handlers(b: telebot.TeleBot):
             )
             return
 
-        country_input = message.text.strip().lower()
-        if country_input not in COUNTRY_DETAILS:
+        country_input   = message.text.strip().lower()
+        country_details = get_country_details()
+        if country_input not in country_details:
+            keys = ", ".join(k.capitalize() for k in country_details.keys())
             b.reply_to(message,
-                "⚠️ দুঃখিত, এটি কোনো সঠিক দেশের নাম নয়।\n\n"
-                "লিখুন: Bangladesh, India, USA, UK, Canada, France, Germany বা Japan"
+                f"⚠️ দুঃখিত, এটি কোনো সঠিক দেশের নাম নয়।\n\n"
+                f"লিখুন: {keys}"
             )
             return
         try:
@@ -465,16 +478,18 @@ def register_handlers(b: telebot.TeleBot):
             recent_log.append(profile)
             tg          = message.from_user.username
             tg_mention  = f"@{tg}" if tg else "Not Available"
+            dev_name    = get_developer_name()
             # Track who received this BD name
-            if COUNTRY_DETAILS[country_input].get('is_bd'):
+            if country_details[country_input].get('is_bd'):
                 log_name_usage(
                     bd_name    = profile['full_name'],
                     user_id    = message.from_user.id,
                     username   = message.from_user.username,
                     first_name = message.from_user.first_name,
                 )
+            dev_line = f"👤 Developer: {dev_name}\n" if dev_name else ""
             b.reply_to(message,
-                f"👤 Developer: {DEVELOPER_NAME}\n"
+                f"{dev_line}"
                 f"🆔 Your Telegram: {tg_mention}\n"
                 f"🌍 দেশ: {country_input.capitalize()}\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n"
@@ -819,6 +834,83 @@ def api_change_password():
     CONFIG['password_hash'] = _hash_password(new_pass)
     save_config(CONFIG)
     return jsonify(success=True, message='✅ Password changed! Please log in again.')
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Flask Routes — Countries API
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+@app.route('/api/countries', methods=['GET'])
+@login_required
+def api_countries_get():
+    return jsonify(countries=get_country_details())
+
+@app.route('/api/countries/add', methods=['POST'])
+@login_required
+def api_countries_add():
+    data   = request.get_json(force=True)
+    key    = data.get('key', '').strip().lower()
+    locale = data.get('locale', '').strip()
+    code   = data.get('code', '').strip()
+    digits = data.get('digits', '').strip()
+    is_bd  = bool(data.get('is_bd', False))
+    if not key:
+        return jsonify(success=False, error='Country key is required (e.g. "usa").')
+    if not locale or not code or not digits:
+        return jsonify(success=False, error='locale, code and digits are all required.')
+    countries = CONFIG.get('countries', {})
+    exists = key in countries
+    countries[key] = {'locale': locale, 'code': code, 'digits': digits, 'is_bd': is_bd}
+    CONFIG['countries'] = countries
+    save_config(CONFIG)
+    verb = 'আপডেট' if exists else 'যোগ'
+    return jsonify(success=True, total=len(countries),
+                   message=f'✅ "{key}" {verb} করা হয়েছে!')
+
+@app.route('/api/countries/delete', methods=['POST'])
+@login_required
+def api_countries_delete():
+    data = request.get_json(force=True)
+    key  = data.get('key', '').strip().lower()
+    countries = CONFIG.get('countries', {})
+    if key not in countries:
+        return jsonify(success=False, error='Country not found.')
+    if len(countries) <= 1:
+        return jsonify(success=False, error='At least one country must remain.')
+    del countries[key]
+    CONFIG['countries'] = countries
+    save_config(CONFIG)
+    return jsonify(success=True, total=len(countries),
+                   message=f'🗑️ "{key}" মুছে ফেলা হয়েছে।')
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Flask Routes — Bot Config API (admin_id, developer_name, nickname_sfx)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+@app.route('/api/bot-config', methods=['GET'])
+@login_required
+def api_bot_config_get():
+    return jsonify(
+        admin_id=CONFIG.get('admin_id', 0),
+        developer_name=CONFIG.get('developer_name', ''),
+        nickname_sfx=CONFIG.get('nickname_sfx', []),
+    )
+
+@app.route('/api/bot-config', methods=['POST'])
+@login_required
+def api_bot_config_set():
+    data = request.get_json(force=True)
+    if 'admin_id' in data:
+        try:
+            CONFIG['admin_id'] = int(data['admin_id']) if data['admin_id'] else 0
+        except (TypeError, ValueError):
+            return jsonify(success=False, error='admin_id must be a number.')
+    if 'developer_name' in data:
+        CONFIG['developer_name'] = str(data['developer_name']).strip()
+    if 'nickname_sfx' in data:
+        raw = data['nickname_sfx']
+        if not isinstance(raw, list):
+            return jsonify(success=False, error='nickname_sfx must be a list.')
+        CONFIG['nickname_sfx'] = [str(s) for s in raw]
+    save_config(CONFIG)
+    return jsonify(success=True, message='✅ Bot config আপডেট হয়েছে!')
 
 @app.route('/health')
 def health():

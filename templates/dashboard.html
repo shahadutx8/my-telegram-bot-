@@ -250,6 +250,7 @@
     <button class="tab-btn active" onclick="switchTab('home',this)">🏠 Home</button>
     <button class="tab-btn" onclick="switchTab('generate',this)">⚡ Generate</button>
     <button class="tab-btn" onclick="switchTab('names',this)">📝 Names</button>
+    <button class="tab-btn" onclick="switchTab('countries',this)">🌍 Countries</button>
     <button class="tab-btn" onclick="switchTab('usage',this)" id="btn-usage">👁️ Usage</button>
     <button class="tab-btn" onclick="switchTab('banned',this)" id="btn-banned">🚫 Banned</button>
     <button class="tab-btn" onclick="switchTab('log',this)">📜 Log</button>
@@ -313,14 +314,7 @@
       <h2>⚡ Generate Profile</h2>
       <div class="gen-row">
         <select id="country-select">
-          <option value="bangladesh">🇧🇩 Bangladesh</option>
-          <option value="india">🇮🇳 India</option>
-          <option value="usa">🇺🇸 USA</option>
-          <option value="uk">🇬🇧 UK</option>
-          <option value="canada">🇨🇦 Canada</option>
-          <option value="france">🇫🇷 France</option>
-          <option value="germany">🇩🇪 Germany</option>
-          <option value="japan">🇯🇵 Japan</option>
+          <option value="">Loading countries…</option>
         </select>
         <button class="btn btn-purple" onclick="generateProfile()">Generate</button>
       </div>
@@ -508,6 +502,63 @@
     </div><!-- /names-grid -->
   </div>
 
+  <!-- ══ COUNTRIES TAB ══ -->
+  <div id="tab-countries" class="page">
+
+    <!-- Add Country Form -->
+    <div class="section" style="padding:22px 26px;margin-bottom:18px;">
+      <h2>🌍 Add / Update Country</h2>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;align-items:end;">
+        <div class="form-group" style="margin:0;">
+          <label>Key (bot command) *</label>
+          <input type="text" id="c-key" placeholder="e.g. usa" class="names-input"/>
+        </div>
+        <div class="form-group" style="margin:0;">
+          <label>Faker Locale *</label>
+          <input type="text" id="c-locale" placeholder="e.g. en_US" class="names-input"/>
+        </div>
+        <div class="form-group" style="margin:0;">
+          <label>Phone Code *</label>
+          <input type="text" id="c-code" placeholder="e.g. +1" class="names-input"/>
+        </div>
+        <div class="form-group" style="margin:0;">
+          <label>Digit Pattern *</label>
+          <input type="text" id="c-digits" placeholder="e.g. XXXXXXXXXX" class="names-input"/>
+        </div>
+        <div class="form-group" style="margin:0;">
+          <label>BD Name Pool?</label>
+          <select id="c-isbd" class="names-input" style="padding:9px 13px;">
+            <option value="false">No (Faker)</option>
+            <option value="true">Yes (BD names)</option>
+          </select>
+        </div>
+        <button class="btn btn-purple" onclick="addCountry()" style="height:40px;">✅ Save</button>
+      </div>
+      <div id="country-msg" class="form-msg"></div>
+    </div>
+
+    <!-- Country List -->
+    <div class="section" style="padding:0;overflow:hidden;">
+      <div style="overflow-x:auto;">
+        <table class="usage-table" id="country-table">
+          <thead>
+            <tr>
+              <th>Key</th>
+              <th>Locale</th>
+              <th>Phone Code</th>
+              <th>Digit Pattern</th>
+              <th>BD Names?</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="country-tbody">
+            <tr><td colspan="6" style="text-align:center;padding:40px;color:#666;">লোড হচ্ছে…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
   <!-- ══ LOG TAB ══ -->
   <div id="tab-log" class="page">
     <div class="section">
@@ -581,6 +632,25 @@
         </div>
         <button class="btn btn-green" onclick="changePassword()">🔒 Update Password</button>
         <div class="form-msg" id="pass-msg"></div>
+      </div>
+
+      <!-- Bot Identity Config -->
+      <div class="settings-card">
+        <h3>🛠️ Bot Identity</h3>
+        <div class="form-group">
+          <label>Admin Telegram ID</label>
+          <input type="number" id="cfg-admin-id" placeholder="e.g. 123456789" autocomplete="off"/>
+        </div>
+        <div class="form-group">
+          <label>Developer Name</label>
+          <input type="text" id="cfg-dev-name" placeholder="Shown in profile replies" autocomplete="off"/>
+        </div>
+        <div class="form-group">
+          <label>Nickname Suffixes (comma separated)</label>
+          <input type="text" id="cfg-nick-sfx" placeholder="07, Pro, Official, King, (leave empty for none)" autocomplete="off"/>
+        </div>
+        <button class="btn btn-green" onclick="saveBotConfig()">💾 Save Config</button>
+        <div class="form-msg" id="cfg-msg"></div>
       </div>
 
       <!-- Danger Zone -->
@@ -956,8 +1026,145 @@ function switchTab(name, btn) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   document.getElementById('tab-' + name).classList.add('active');
   btn.classList.add('active');
-  if (name === 'usage')  loadUsage();
-  if (name === 'banned') loadBanned();
+  if (name === 'usage')     loadUsage();
+  if (name === 'banned')    loadBanned();
+  if (name === 'countries') loadCountries();
+  if (name === 'settings')  loadBotConfigForm();
+  if (name === 'generate')  loadCountrySelect();
+}
+
+// ── Countries management ──
+let countriesData = {};
+
+async function loadCountries() {
+  const res = await fetch('/api/countries');
+  if (!res.ok) { toast('Countries লোড ব্যর্থ', true); return; }
+  const data = await res.json();
+  countriesData = data.countries || {};
+  renderCountries();
+  loadCountrySelect();
+}
+
+function renderCountries() {
+  const tbody = document.getElementById('country-tbody');
+  if (!tbody) return;
+  const keys = Object.keys(countriesData);
+  if (!keys.length) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:40px;color:#555;">কোনো দেশ নেই।</td></tr>';
+    return;
+  }
+  const frag = document.createDocumentFragment();
+  keys.sort().forEach(key => {
+    const c = countriesData[key];
+    const tr = document.createElement('tr');
+    const cells = [
+      `<strong style="color:#c4b5fd">${key}</strong>`,
+      `<span style="color:#aaa;font-size:12px">${c.locale}</span>`,
+      `<span style="color:#60a5fa">${c.code}</span>`,
+      `<span style="font-family:monospace;font-size:12px;color:#fcd34d">${c.digits}</span>`,
+      c.is_bd ? '<span style="color:#4ade80">✅ BD</span>' : '<span style="color:#888">❌</span>',
+    ];
+    tr.innerHTML = cells.map(h => `<td>${h}</td>`).join('');
+    // Edit button — prefills form
+    const tdAct = document.createElement('td');
+    tdAct.style.whiteSpace = 'nowrap';
+    const editBtn = document.createElement('button');
+    editBtn.className = 'btn btn-sm btn-blue';
+    editBtn.textContent = '✏️ Edit';
+    editBtn.style.marginRight = '6px';
+    editBtn.addEventListener('click', () => prefillCountryForm(key, c));
+    const delBtn = document.createElement('button');
+    delBtn.className = 'btn btn-sm btn-red';
+    delBtn.textContent = '🗑️';
+    delBtn.addEventListener('click', () => deleteCountry(key, tr));
+    tdAct.appendChild(editBtn); tdAct.appendChild(delBtn);
+    tr.appendChild(tdAct);
+    frag.appendChild(tr);
+  });
+  tbody.innerHTML = '';
+  tbody.appendChild(frag);
+}
+
+function prefillCountryForm(key, c) {
+  document.getElementById('c-key').value    = key;
+  document.getElementById('c-locale').value = c.locale;
+  document.getElementById('c-code').value   = c.code;
+  document.getElementById('c-digits').value = c.digits;
+  document.getElementById('c-isbd').value   = c.is_bd ? 'true' : 'false';
+}
+
+async function addCountry() {
+  const key    = document.getElementById('c-key').value.trim().toLowerCase();
+  const locale = document.getElementById('c-locale').value.trim();
+  const code   = document.getElementById('c-code').value.trim();
+  const digits = document.getElementById('c-digits').value.trim();
+  const is_bd  = document.getElementById('c-isbd').value === 'true';
+  if (!key || !locale || !code || !digits) { showMsg('country-msg', 'সব ফিল্ড পূরণ করুন।', true); return; }
+  const data = await apiPost('/api/countries/add', { key, locale, code, digits, is_bd });
+  if (!data) return;
+  if (!data.success) { showMsg('country-msg', data.error, true); return; }
+  showMsg('country-msg', data.message, false);
+  toast(data.message);
+  ['c-key','c-locale','c-code','c-digits'].forEach(id => document.getElementById(id).value = '');
+  await loadCountries();
+}
+
+async function deleteCountry(key, rowEl) {
+  if (!confirm(`"${key}" দেশটি মুছে ফেলবেন?`)) return;
+  const data = await apiPost('/api/countries/delete', { key });
+  if (!data) return;
+  if (!data.success) { toast(data.error, true); return; }
+  toast(data.message);
+  delete countriesData[key];
+  rowEl.remove();
+  loadCountrySelect();
+}
+
+async function loadCountrySelect() {
+  const sel = document.getElementById('country-select');
+  if (!sel) return;
+  if (!Object.keys(countriesData).length) {
+    // fetch if not loaded yet
+    const res = await fetch('/api/countries');
+    if (!res.ok) return;
+    const d = await res.json();
+    countriesData = d.countries || {};
+  }
+  const prev = sel.value;
+  sel.innerHTML = '';
+  Object.keys(countriesData).sort().forEach(key => {
+    const opt = document.createElement('option');
+    opt.value = key;
+    opt.textContent = key.charAt(0).toUpperCase() + key.slice(1);
+    sel.appendChild(opt);
+  });
+  if (prev && countriesData[prev]) sel.value = prev;
+}
+
+// ── Bot Config (admin_id, developer_name, nickname_sfx) ──
+async function loadBotConfigForm() {
+  const res = await fetch('/api/bot-config');
+  if (!res.ok) return;
+  const data = await res.json();
+  const aid = document.getElementById('cfg-admin-id');
+  const dev = document.getElementById('cfg-dev-name');
+  const sfx = document.getElementById('cfg-nick-sfx');
+  if (aid) aid.value = data.admin_id || '';
+  if (dev) dev.value = data.developer_name || '';
+  if (sfx) sfx.value = (data.nickname_sfx || []).join(', ');
+}
+
+async function saveBotConfig() {
+  const admin_id_raw    = document.getElementById('cfg-admin-id').value.trim();
+  const developer_name  = document.getElementById('cfg-dev-name').value.trim();
+  const sfx_raw         = document.getElementById('cfg-nick-sfx').value;
+  const nickname_sfx    = sfx_raw.split(',').map(s => s.trim()).filter(s => s !== undefined);
+  // Always include admin_id so the user can also clear it to 0
+  const payload = { admin_id: admin_id_raw !== '' ? admin_id_raw : 0, developer_name, nickname_sfx };
+  const data = await apiPost('/api/bot-config', payload);
+  if (!data) return;
+  showMsg('cfg-msg', data.message || data.error, !data.success);
+  if (data.success) toast(data.message);
 }
 
 // ── Generate Profile ──
@@ -1085,6 +1292,11 @@ function toast(msg, isErr) {
   t.className   = 'show' + (isErr ? ' err' : '');
   setTimeout(() => t.className = '', 2500);
 }
+
+// ── Init on page load ──
+(async function init() {
+  await loadCountrySelect();
+})();
 </script>
 </body>
 </html>
