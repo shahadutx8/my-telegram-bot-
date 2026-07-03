@@ -115,8 +115,8 @@ def load_config():
         "nickname_sfx": ["07", "Official", "Gamer", "Pro", "Boss", "Real", "King", "BD", "X", ""],
         # Countries — managed via dashboard
         "countries": {
-            "bangladesh": {"locale": "en_US", "code": "+880", "digits": "1XXXXXXXXX", "is_bd": True},
-            "bd":         {"locale": "en_US", "code": "+880", "digits": "1XXXXXXXXX", "is_bd": True},
+            "bangladesh": {"locale": "en_US", "code": "+880", "digits": ["13XXXXXXXX", "14XXXXXXXX", "15XXXXXXXX", "16XXXXXXXX", "19XXXXXXXX"], "is_bd": True},
+            "bd":         {"locale": "en_US", "code": "+880", "digits": ["13XXXXXXXX", "14XXXXXXXX", "15XXXXXXXX", "16XXXXXXXX", "19XXXXXXXX"], "is_bd": True},
             "india":      {"locale": "en_IN", "code": "+91",  "digits": "XXXXXXXXXX", "is_bd": False},
             "usa":        {"locale": "en_US", "code": "+1",   "digits": "XXXXXXXXXX", "is_bd": False},
             "uk":         {"locale": "en_GB", "code": "+44",  "digits": "XXXXXXXXXX", "is_bd": False},
@@ -445,7 +445,12 @@ def generate_unique_bd_name():
                 USED_NAMES = set()
                 save_used_names(USED_NAMES)
 
-def generate_fake_phone(code, pattern):
+def generate_fake_phone(code, pattern_or_list):
+    """Pick a random pattern from a list (or use the single string) then generate."""
+    if isinstance(pattern_or_list, list) and pattern_or_list:
+        pattern = random.choice(pattern_or_list)
+    else:
+        pattern = pattern_or_list
     return code + "".join(
         str(random.randint(0, 9)) if c == 'X' else c for c in pattern
     )
@@ -956,15 +961,20 @@ def api_countries_add():
     key    = data.get('key', '').strip().lower()
     locale = data.get('locale', '').strip()
     code   = data.get('code', '').strip()
-    digits = data.get('digits', '').strip()
     is_bd  = bool(data.get('is_bd', False))
+    # Accept either a list of patterns or a single string (backward compat)
+    raw_patterns = data.get('patterns') or data.get('digits') or []
+    if isinstance(raw_patterns, str):
+        raw_patterns = [raw_patterns]
+    patterns = [p.strip() for p in raw_patterns if str(p).strip()]
     if not key:
         return jsonify(success=False, error='Country key is required (e.g. "usa").')
-    if not locale or not code or not digits:
-        return jsonify(success=False, error='locale, code and digits are all required.')
+    if not locale or not code or not patterns:
+        return jsonify(success=False, error='locale, code এবং অন্তত একটি digit pattern দিতে হবে।')
     countries = CONFIG.get('countries', {})
     exists = key in countries
-    countries[key] = {'locale': locale, 'code': code, 'digits': digits, 'is_bd': is_bd}
+    # Store as list so generate_fake_phone can pick randomly
+    countries[key] = {'locale': locale, 'code': code, 'digits': patterns, 'is_bd': is_bd}
     CONFIG['countries'] = countries
     save_config(CONFIG)
     verb = 'আপডেট' if exists else 'যোগ'
