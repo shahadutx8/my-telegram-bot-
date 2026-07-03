@@ -1,6 +1,4 @@
 pyTelegramBotAPI
 Faker
 Flask
-Faker
-Flask
-pyTelegramBotAPI
+psycopg2-binary

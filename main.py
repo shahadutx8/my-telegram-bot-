@@ -13,7 +13,69 @@ from functools import wraps
 from collections import deque
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# Config — loaded from config.json (overrides env vars)
+# Persistent KV Store (PostgreSQL ▶ JSON file fallback)
+# Set DATABASE_URL env var to enable cross-deploy persistence.
+# Without it the app works normally using local JSON files.
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+_DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+_db_conn = None
+_db_lock = Lock()
+
+def _get_db():
+    """Return a live psycopg2 connection, or None if DATABASE_URL not set."""
+    global _db_conn
+    if not _DATABASE_URL:
+        return None
+    with _db_lock:
+        try:
+            if _db_conn is None or _db_conn.closed:
+                import psycopg2
+                _db_conn = psycopg2.connect(_DATABASE_URL, sslmode='require')
+                _db_conn.autocommit = True
+                with _db_conn.cursor() as cur:
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS kv_store (
+                            key   TEXT PRIMARY KEY,
+                            value TEXT NOT NULL
+                        )
+                    """)
+        except Exception as e:
+            print(f"[DB] connect error: {e}")
+            _db_conn = None
+    return _db_conn
+
+def db_get(key: str):
+    """Return parsed JSON for key, or None (no DB or key missing)."""
+    conn = _get_db()
+    if not conn:
+        return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT value FROM kv_store WHERE key = %s", (key,))
+            row = cur.fetchone()
+            return json.loads(row[0]) if row else None
+    except Exception as e:
+        print(f"[DB] get({key}) error: {e}")
+        return None
+
+def db_set(key: str, value) -> bool:
+    """Upsert JSON-serialised value. Returns True on success."""
+    conn = _get_db()
+    if not conn:
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO kv_store (key, value) VALUES (%s, %s)
+                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+            """, (key, json.dumps(value, ensure_ascii=False)))
+        return True
+    except Exception as e:
+        print(f"[DB] set({key}) error: {e}")
+        return False
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Config — loaded from PostgreSQL then config.json
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CONFIG_FILE = "config.json"
 config_lock = Lock()
@@ -104,16 +166,13 @@ if NAME_DEFAULTS == {k: v[:] for k, v in _EMERGENCY_DEFAULTS.items()}:
 def load_config():
     defaults = {
         "bot_token": "", "password_hash": "",
-        "bot_reply_fields": FIELD_KEYS[:],  # all fields enabled by default
+        "bot_reply_fields": FIELD_KEYS[:],
         "bd_first_names": NAME_DEFAULTS["bd_first_names"][:],
         "bd_last_names":  NAME_DEFAULTS["bd_last_names"][:],
         "bd_prefixes":    NAME_DEFAULTS["bd_prefixes"][:],
-        # Bot identity — managed via dashboard (env vars used as one-time seed)
         "admin_id":       int(os.environ.get("ADMIN_ID", "0") or "0"),
         "developer_name": os.environ.get("DEVELOPER_NAME", ""),
-        # Nickname suffixes — managed via dashboard
         "nickname_sfx": ["07", "Official", "Gamer", "Pro", "Boss", "Real", "King", "BD", "X", ""],
-        # Countries — managed via dashboard
         "countries": {
             "bangladesh": {"locale": "en_US", "code": "+880", "digits": ["13XXXXXXXX", "14XXXXXXXX", "15XXXXXXXX", "16XXXXXXXX", "19XXXXXXXX"], "is_bd": True},
             "bd":         {"locale": "en_US", "code": "+880", "digits": ["13XXXXXXXX", "14XXXXXXXX", "15XXXXXXXX", "16XXXXXXXX", "19XXXXXXXX"], "is_bd": True},
@@ -126,6 +185,12 @@ def load_config():
             "japan":      {"locale": "ja_JP", "code": "+81",  "digits": "XXXXXXXXXX", "is_bd": False},
         },
     }
+    # 1st priority: PostgreSQL (survives deploys)
+    db_data = db_get("config")
+    if db_data:
+        defaults.update(db_data)
+        return defaults
+    # 2nd priority: local JSON file (local dev / Replit)
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
@@ -137,11 +202,14 @@ def load_config():
 
 def save_config(cfg: dict):
     with config_lock:
+        # Always save to DB if available
+        db_set("config", cfg)
+        # Also write local file (local dev fallback)
         try:
             with open(CONFIG_FILE, "w", encoding="utf-8") as f:
                 json.dump(cfg, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            print(f"Config save error: {e}")
+            print(f"Config file save error: {e}")
 
 CONFIG = load_config()
 
@@ -272,17 +340,20 @@ BANNED_FILE  = "banned_users.json"
 banned_lock  = Lock()
 
 def load_banned() -> dict:
+    db_data = db_get("banned")
+    if db_data is not None:
+        return {int(k): v for k, v in db_data.items()}
     if os.path.exists(BANNED_FILE):
         try:
             with open(BANNED_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                # keys are stored as strings in JSON; convert back to int
                 return {int(k): v for k, v in data.items()}
         except Exception:
             return {}
     return {}
 
 def save_banned(data: dict):
+    db_set("banned", data)
     try:
         with open(BANNED_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
@@ -301,6 +372,9 @@ USED_NAMES_FILE  = "used_names.json"
 used_names_lock  = Lock()
 
 def load_used_names():
+    db_data = db_get("used_names")
+    if db_data is not None:
+        return set(db_data)
     if os.path.exists(USED_NAMES_FILE):
         try:
             with open(USED_NAMES_FILE, "r", encoding="utf-8") as f:
@@ -310,6 +384,7 @@ def load_used_names():
     return set()
 
 def save_used_names(used: set):
+    db_set("used_names", list(used))
     try:
         with open(USED_NAMES_FILE, "w", encoding="utf-8") as f:
             json.dump(list(used), f, ensure_ascii=False)
@@ -325,6 +400,9 @@ NAME_LOG_FILE = "name_log.json"
 name_log_lock = Lock()
 
 def load_name_log() -> list:
+    db_data = db_get("name_log")
+    if db_data is not None:
+        return db_data if isinstance(db_data, list) else []
     if os.path.exists(NAME_LOG_FILE):
         try:
             with open(NAME_LOG_FILE, "r", encoding="utf-8") as f:
@@ -335,6 +413,7 @@ def load_name_log() -> list:
     return []
 
 def save_name_log(log: list):
+    db_set("name_log", log)
     try:
         with open(NAME_LOG_FILE, "w", encoding="utf-8") as f:
             json.dump(log, f, ensure_ascii=False, indent=2)
@@ -364,6 +443,9 @@ USERS_FILE = "users.json"
 users_lock = Lock()
 
 def load_users() -> dict:
+    db_data = db_get("users")
+    if db_data is not None:
+        return {int(k): v for k, v in db_data.items()}
     if os.path.exists(USERS_FILE):
         try:
             with open(USERS_FILE, "r", encoding="utf-8") as f:
@@ -374,6 +456,7 @@ def load_users() -> dict:
     return {}
 
 def save_users(data: dict):
+    db_set("users", data)
     try:
         with open(USERS_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
