@@ -253,6 +253,8 @@
     <button class="tab-btn" onclick="switchTab('countries',this)">🌍 Countries</button>
     <button class="tab-btn" onclick="switchTab('usage',this)" id="btn-usage">👁️ Usage</button>
     <button class="tab-btn" onclick="switchTab('banned',this)" id="btn-banned">🚫 Banned</button>
+    <button class="tab-btn" onclick="switchTab('users',this)">📊 Users</button>
+    <button class="tab-btn" onclick="switchTab('broadcast',this)">📢 Broadcast</button>
     <button class="tab-btn" onclick="switchTab('log',this)">📜 Log</button>
     <button class="tab-btn" onclick="switchTab('settings',this)">⚙️ Settings</button>
   </div>
@@ -559,6 +561,78 @@
     </div>
   </div>
 
+  <!-- ══ USERS TAB ══ -->
+  <div id="tab-users" class="page">
+    <div class="section" style="padding:16px 22px;margin-bottom:16px;">
+      <div style="display:flex;flex-wrap:wrap;align-items:center;gap:12px;">
+        <div style="flex:1;min-width:200px;">
+          <input type="text" id="users-search" placeholder="🔍 User ID / @username / নাম দিয়ে খুঁজুন…"
+            oninput="usersSearch()" class="names-input" style="width:100%;"/>
+        </div>
+        <span id="users-count" style="font-size:13px;color:#aaa;white-space:nowrap;"></span>
+      </div>
+    </div>
+    <div class="section" style="padding:0;overflow:hidden;">
+      <div style="overflow-x:auto;">
+        <table class="usage-table" id="users-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Telegram ইউজার</th>
+              <th>User ID</th>
+              <th style="text-align:center;">প্রোফাইল নিয়েছে</th>
+              <th>শেষ দেখা</th>
+            </tr>
+          </thead>
+          <tbody id="users-tbody">
+            <tr><td colspan="5" style="text-align:center;padding:40px;color:#666;">লোড হচ্ছে…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ BROADCAST TAB ══ -->
+  <div id="tab-broadcast" class="page">
+    <div class="section" style="margin-bottom:18px;">
+      <h2>📢 Broadcast Message</h2>
+      <p style="font-size:13px;color:#aaa;margin-bottom:16px;">বটে এখন পর্যন্ত যোগাযোগ করেছে এমন সব ইউজারকে একটি মেসেজ পাঠান।</p>
+      <div class="form-group">
+        <label>মেসেজ লিখুন</label>
+        <textarea id="broadcast-text"
+          style="width:100%;min-height:120px;padding:11px 14px;border:1px solid rgba(255,255,255,0.15);
+                 border-radius:10px;background:rgba(255,255,255,0.07);color:#fff;font-size:14px;
+                 outline:none;resize:vertical;font-family:inherit;"
+          placeholder="সবাইকে যে মেসেজটি পাঠাতে চান…"></textarea>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:4px;">
+        <button class="btn btn-purple" onclick="startBroadcast()" id="broadcast-btn">📢 Send to All</button>
+        <span id="broadcast-user-count" style="font-size:13px;color:#aaa;"></span>
+      </div>
+      <div class="form-msg" id="broadcast-msg"></div>
+    </div>
+
+    <!-- Progress -->
+    <div class="section" id="broadcast-progress-card" style="display:none;">
+      <h2>📡 Broadcast Progress</h2>
+      <div style="margin-bottom:12px;">
+        <div style="display:flex;justify-content:space-between;margin-bottom:6px;font-size:13px;">
+          <span>পাঠানো হচ্ছে…</span>
+          <span id="bc-fraction" style="color:#a78bfa;">0 / 0</span>
+        </div>
+        <div style="background:rgba(255,255,255,0.08);border-radius:8px;height:10px;overflow:hidden;">
+          <div id="bc-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#7c63f5,#5b8dee);transition:width 0.4s;border-radius:8px;"></div>
+        </div>
+      </div>
+      <div style="display:flex;gap:20px;flex-wrap:wrap;font-size:13px;">
+        <span>✅ সফল: <strong id="bc-sent" style="color:#4ade80;">0</strong></span>
+        <span>❌ ব্যর্থ: <strong id="bc-failed" style="color:#f87171;">0</strong></span>
+        <span>মোট: <strong id="bc-total" style="color:#a78bfa;">0</strong></span>
+      </div>
+      <p id="bc-done-msg" style="margin-top:12px;font-size:13px;color:#4ade80;display:none;">✅ Broadcast সম্পন্ন হয়েছে!</p>
+    </div>
+  </div>
+
   <!-- ══ LOG TAB ══ -->
   <div id="tab-log" class="page">
     <div class="section">
@@ -651,6 +725,17 @@
         </div>
         <button class="btn btn-green" onclick="saveBotConfig()">💾 Save Config</button>
         <div class="form-msg" id="cfg-msg"></div>
+      </div>
+
+      <!-- Custom Fields -->
+      <div class="settings-card">
+        <h3>🎛️ Bot Reply Fields</h3>
+        <p style="font-size:12px;color:#aaa;margin-bottom:14px;">বটের রিপ্লাইতে কোন কোন তথ্য দেখাবে তা বেছে নিন।</p>
+        <div id="fields-checkboxes" style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px;">
+          <span style="font-size:12px;color:#666;">লোড হচ্ছে…</span>
+        </div>
+        <button class="btn btn-green" onclick="saveFieldsConfig()">💾 Save Fields</button>
+        <div class="form-msg" id="fields-msg"></div>
       </div>
 
       <!-- Danger Zone -->
@@ -1029,8 +1114,10 @@ function switchTab(name, btn) {
   if (name === 'usage')     loadUsage();
   if (name === 'banned')    loadBanned();
   if (name === 'countries') loadCountries();
-  if (name === 'settings')  loadBotConfigForm();
+  if (name === 'settings')  { loadBotConfigForm(); loadFieldsConfig(); }
   if (name === 'generate')  loadCountrySelect();
+  if (name === 'users')     loadUsers();
+  if (name === 'broadcast') loadBroadcastUserCount();
 }
 
 // ── Countries management ──
@@ -1291,6 +1378,154 @@ function toast(msg, isErr) {
   t.textContent = msg;
   t.className   = 'show' + (isErr ? ' err' : '');
   setTimeout(() => t.className = '', 2500);
+}
+
+// ── User Stats tab ──
+let usersData = [];
+
+async function loadUsers() {
+  try {
+    const res = await fetch('/api/user-stats');
+    if (!res.ok) { toast('User stats লোড ব্যর্থ', true); return; }
+    const data = await res.json();
+    usersData = data.entries || [];
+    const cnt = document.getElementById('users-count');
+    if (cnt) cnt.textContent = `মোট ইউজার: ${data.total} জন`;
+    renderUsers(usersData);
+  } catch { toast('নেটওয়ার্ক ত্রুটি', true); }
+}
+
+function renderUsers(entries) {
+  const tbody = document.getElementById('users-tbody');
+  if (!tbody) return;
+  if (!entries.length) {
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:40px;color:#555;">কোনো ইউজার ডেটা নেই — বটে কেউ মেসেজ পাঠালে এখানে দেখাবে।</td></tr>';
+    return;
+  }
+  const frag = document.createDocumentFragment();
+  entries.forEach((e, i) => {
+    const tr = document.createElement('tr');
+
+    const tdIdx = document.createElement('td'); tdIdx.textContent = i + 1; tr.appendChild(tdIdx);
+
+    const tdUser = document.createElement('td');
+    const userDiv = document.createElement('div'); userDiv.className = 'usage-user';
+    const uname = document.createElement('span'); uname.className = 'uname';
+    uname.textContent = e.username ? '@' + e.username : '—';
+    const ufirst = document.createElement('span'); ufirst.className = 'ufirst';
+    ufirst.textContent = e.first_name || '';
+    userDiv.appendChild(uname); userDiv.appendChild(ufirst); tdUser.appendChild(userDiv); tr.appendChild(tdUser);
+
+    const tdUid = document.createElement('td');
+    const uid = document.createElement('span'); uid.className = 'usage-uid'; uid.textContent = e.user_id;
+    tdUid.appendChild(uid); tr.appendChild(tdUid);
+
+    const tdCount = document.createElement('td'); tdCount.style.textAlign = 'center';
+    const countBadge = document.createElement('span');
+    countBadge.style.cssText = 'background:rgba(124,99,245,0.2);color:#c4b5fd;border:1px solid rgba(124,99,245,0.35);border-radius:12px;padding:2px 10px;font-weight:700;font-size:13px;';
+    countBadge.textContent = (e.profile_count || 0).toLocaleString();
+    tdCount.appendChild(countBadge); tr.appendChild(tdCount);
+
+    const tdTime = document.createElement('td'); tdTime.className = 'usage-time';
+    tdTime.textContent = e.last_seen || '—'; tr.appendChild(tdTime);
+
+    frag.appendChild(tr);
+  });
+  tbody.innerHTML = '';
+  tbody.appendChild(frag);
+}
+
+function usersSearch() {
+  const q = document.getElementById('users-search').value.trim().toLowerCase();
+  renderUsers(q ? usersData.filter(e =>
+    String(e.user_id).includes(q) ||
+    (e.username || '').toLowerCase().includes(q) ||
+    (e.first_name || '').toLowerCase().includes(q)
+  ) : usersData);
+}
+
+// ── Broadcast tab ──
+let bcPollTimer = null;
+
+async function loadBroadcastUserCount() {
+  try {
+    const res = await fetch('/api/user-stats');
+    if (!res.ok) return;
+    const data = await res.json();
+    const el = document.getElementById('broadcast-user-count');
+    if (el) el.textContent = `মোট ${data.total} জন ইউজার পাবেন`;
+  } catch {}
+}
+
+async function startBroadcast() {
+  const text = (document.getElementById('broadcast-text').value || '').trim();
+  if (!text) { showMsg('broadcast-msg', 'মেসেজ লিখুন।', true); return; }
+  const btn = document.getElementById('broadcast-btn');
+  btn.disabled = true; btn.textContent = 'পাঠানো হচ্ছে…';
+  const data = await apiPost('/api/broadcast', { text });
+  btn.disabled = false; btn.textContent = '📢 Send to All';
+  if (!data) return;
+  if (!data.success) { showMsg('broadcast-msg', data.error, true); return; }
+  showMsg('broadcast-msg', data.message, false);
+  document.getElementById('broadcast-progress-card').style.display = 'block';
+  document.getElementById('bc-done-msg').style.display = 'none';
+  document.getElementById('bc-total').textContent = data.total;
+  if (bcPollTimer) clearInterval(bcPollTimer);
+  bcPollTimer = setInterval(pollBroadcastStatus, 800);
+}
+
+async function pollBroadcastStatus() {
+  try {
+    const res = await fetch('/api/broadcast-status');
+    if (!res.ok) return;
+    const s = await res.json();
+    document.getElementById('bc-sent').textContent   = s.sent;
+    document.getElementById('bc-failed').textContent = s.failed;
+    document.getElementById('bc-total').textContent  = s.total;
+    document.getElementById('bc-fraction').textContent = `${s.sent + s.failed} / ${s.total}`;
+    const pct = s.total > 0 ? Math.round(((s.sent + s.failed) / s.total) * 100) : 0;
+    document.getElementById('bc-bar').style.width = pct + '%';
+    if (s.done && !s.running) {
+      clearInterval(bcPollTimer); bcPollTimer = null;
+      document.getElementById('bc-done-msg').style.display = 'block';
+    }
+  } catch {}
+}
+
+// ── Custom Fields (Settings tab) ──
+let allFields = [];
+
+async function loadFieldsConfig() {
+  try {
+    const res = await fetch('/api/fields-config');
+    if (!res.ok) return;
+    const data = await res.json();
+    allFields = data.all_fields || [];
+    const enabled = new Set(data.enabled || []);
+    const container = document.getElementById('fields-checkboxes');
+    if (!container) return;
+    container.innerHTML = '';
+    allFields.forEach(f => {
+      const label = document.createElement('label');
+      label.style.cssText = 'display:flex;align-items:center;gap:10px;cursor:pointer;font-size:14px;';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox'; cb.value = f.key; cb.checked = enabled.has(f.key);
+      cb.style.cssText = 'width:16px;height:16px;accent-color:#7c63f5;cursor:pointer;';
+      const txt = document.createTextNode(`${f.emoji} ${f.label}`);
+      label.appendChild(cb); label.appendChild(txt);
+      container.appendChild(label);
+    });
+  } catch {}
+}
+
+async function saveFieldsConfig() {
+  const checkboxes = document.querySelectorAll('#fields-checkboxes input[type=checkbox]');
+  const enabled = [...checkboxes].filter(cb => cb.checked).map(cb => cb.value);
+  if (!enabled.length) { showMsg('fields-msg', 'অন্তত একটি ফিল্ড চালু রাখতে হবে।', true); return; }
+  const data = await apiPost('/api/fields-config', { enabled });
+  if (!data) return;
+  showMsg('fields-msg', data.message || data.error, !data.success);
+  if (data.success) toast(data.message);
 }
 
 // ── Init on page load ──

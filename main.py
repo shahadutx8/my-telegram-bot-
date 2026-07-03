@@ -25,6 +25,29 @@ def _hash_password(password: str) -> str:
 
 NAMES_DEFAULT_FILE = "names_default.json"
 
+# ── Profile field definitions ──────────────────
+FIELD_KEYS = ['full_name', 'nickname', 'facebook_id', 'google', 'whatsapp', 'email', 'mobile', 'username']
+FIELD_LABELS = {
+    'full_name':   'Withdrawer Name',
+    'nickname':    'Nickname',
+    'facebook_id': 'Facebook ID',
+    'google':      'Google',
+    'whatsapp':    'WhatsApp',
+    'email':       'Email',
+    'mobile':      'Mobile',
+    'username':    'Username',
+}
+FIELD_EMOJI = {
+    'full_name':   '👤',
+    'nickname':    '🏷️',
+    'facebook_id': '📘',
+    'google':      '🔵',
+    'whatsapp':    '💬',
+    'email':       '📧',
+    'mobile':      '📞',
+    'username':    '🔗',
+}
+
 # Minimal emergency fallback — used only when names_default.json is missing or corrupt.
 _EMERGENCY_DEFAULTS: dict = {
     "bd_first_names": ["Md"],
@@ -81,6 +104,7 @@ if NAME_DEFAULTS == {k: v[:] for k, v in _EMERGENCY_DEFAULTS.items()}:
 def load_config():
     defaults = {
         "bot_token": "", "password_hash": "",
+        "bot_reply_fields": FIELD_KEYS[:],  # all fields enabled by default
         "bd_first_names": NAME_DEFAULTS["bd_first_names"][:],
         "bd_last_names":  NAME_DEFAULTS["bd_last_names"][:],
         "bd_prefixes":    NAME_DEFAULTS["bd_prefixes"][:],
@@ -333,6 +357,71 @@ def log_name_usage(bd_name: str, user_id: int, username: str | None, first_name:
         NAME_LOG.append(entry)
         save_name_log(NAME_LOG)
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Users registry — all users who ever used the bot
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+USERS_FILE = "users.json"
+users_lock = Lock()
+
+def load_users() -> dict:
+    if os.path.exists(USERS_FILE):
+        try:
+            with open(USERS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return {int(k): v for k, v in data.items()}
+        except Exception:
+            return {}
+    return {}
+
+def save_users(data: dict):
+    try:
+        with open(USERS_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+KNOWN_USERS: dict = load_users()  # {user_id: {username, first_name, last_seen, profile_count}}
+
+def track_user(user_id: int, username: str | None, first_name: str | None, increment_count: bool = False):
+    """Upsert user into registry. Thread-safe."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    with users_lock:
+        existing = KNOWN_USERS.get(user_id, {})
+        KNOWN_USERS[user_id] = {
+            "username":      username or existing.get("username", ""),
+            "first_name":    first_name or existing.get("first_name", ""),
+            "last_seen":     now,
+            "profile_count": existing.get("profile_count", 0) + (1 if increment_count else 0),
+        }
+        save_users(KNOWN_USERS)
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Broadcast state (in-memory)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+broadcast_status = {"running": False, "total": 0, "sent": 0, "failed": 0, "done": False, "message": ""}
+broadcast_lock = Lock()
+
+def _do_broadcast(text: str, user_ids: list):
+    """Run in a daemon thread. Sends message to each user_id."""
+    import time
+    global broadcast_status
+    with broadcast_lock:
+        broadcast_status.update({"running": True, "total": len(user_ids), "sent": 0, "failed": 0, "done": False})
+    for uid in user_ids:
+        try:
+            if bot:
+                bot.send_message(uid, text)
+                with broadcast_lock:
+                    broadcast_status["sent"] += 1
+        except Exception:
+            with broadcast_lock:
+                broadcast_status["failed"] += 1
+        time.sleep(0.05)  # ~20 msg/s — safe for Telegram limits
+    with broadcast_lock:
+        broadcast_status["running"] = False
+        broadcast_status["done"] = True
+
 def generate_unique_bd_name():
     global USED_NAMES
     with used_names_lock:
@@ -415,8 +504,12 @@ def generate_profile(country_key):
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def register_handlers(b: telebot.TeleBot):
 
+    def _get_enabled_fields():
+        return CONFIG.get("bot_reply_fields", FIELD_KEYS)
+
     @b.message_handler(commands=['start'])
     def send_welcome(message):
+        track_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
         used_count   = len(USED_NAMES)
         remaining    = get_total_combinations() - used_count
         country_keys = ", ".join(k.capitalize() for k in get_country_details().keys())
@@ -456,6 +549,9 @@ def register_handlers(b: telebot.TeleBot):
 
     @b.message_handler(func=lambda message: True)
     def handle_all_messages(message):
+        # Always track the user
+        track_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
+
         # Ban check — reply and stop immediately
         if is_banned(message.from_user.id):
             b.reply_to(message,
@@ -487,19 +583,28 @@ def register_handlers(b: telebot.TeleBot):
                     username   = message.from_user.username,
                     first_name = message.from_user.first_name,
                 )
+            # Update profile count for this user
+            track_user(
+                message.from_user.id,
+                message.from_user.username,
+                message.from_user.first_name,
+                increment_count=True,
+            )
+            # Build reply using only enabled fields
+            enabled = _get_enabled_fields()
+            field_lines = ""
+            for key in FIELD_KEYS:
+                if key in enabled and key in profile:
+                    emoji = FIELD_EMOJI[key]
+                    label = FIELD_LABELS[key]
+                    field_lines += f"{emoji} {label}: `{profile[key]}`\n"
             dev_line = f"👤 Developer: {dev_name}\n" if dev_name else ""
             b.reply_to(message,
                 f"{dev_line}"
                 f"🆔 Your Telegram: {tg_mention}\n"
                 f"🌍 দেশ: {country_input.capitalize()}\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"👤 Withdrawer Name: `{profile['full_name']}`\n"
-                f"🏷️ Nickname: `{profile['nickname']}`\n"
-                f"📘 Facebook ID: `{profile['facebook_id']}`\n"
-                f"🔵 Google: `{profile['google']}`\n"
-                f"💬 WhatsApp: `{profile['whatsapp']}`\n"
-                f"📧 Email: `{profile['email']}`\n"
-                f"📞 Mobile: `{profile['mobile']}`\n"
+                f"{field_lines}"
                 f"━━━━━━━━━━━━━━━━━━━━\n"
                 f"💡 তথ্যের ওপর ট্যাপ করলেই অটো-কপি হয়ে যাবে।",
                 parse_mode="Markdown"
@@ -911,6 +1016,83 @@ def api_bot_config_set():
         CONFIG['nickname_sfx'] = [str(s) for s in raw]
     save_config(CONFIG)
     return jsonify(success=True, message='✅ Bot config আপডেট হয়েছে!')
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Flask Routes — Fields config API
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+@app.route('/api/fields-config', methods=['GET'])
+@login_required
+def api_fields_config_get():
+    return jsonify(
+        all_fields=[{"key": k, "label": FIELD_LABELS[k], "emoji": FIELD_EMOJI[k]} for k in FIELD_KEYS],
+        enabled=CONFIG.get("bot_reply_fields", FIELD_KEYS),
+    )
+
+@app.route('/api/fields-config', methods=['POST'])
+@login_required
+def api_fields_config_set():
+    data = request.get_json(force=True)
+    enabled = data.get("enabled", [])
+    if not isinstance(enabled, list):
+        return jsonify(success=False, error="enabled must be a list.")
+    valid = [k for k in enabled if k in FIELD_KEYS]
+    if not valid:
+        return jsonify(success=False, error="অন্তত একটি ফিল্ড চালু রাখতে হবে।")
+    CONFIG["bot_reply_fields"] = valid
+    save_config(CONFIG)
+    return jsonify(success=True, enabled=valid, message="✅ ফিল্ড সেটিং সেভ হয়েছে!")
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Flask Routes — User stats API
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+@app.route('/api/user-stats', methods=['GET'])
+@login_required
+def api_user_stats():
+    q = request.args.get('q', '').strip().lower()
+    with users_lock:
+        data = [
+            {"user_id": uid, **info}
+            for uid, info in KNOWN_USERS.items()
+        ]
+    data.sort(key=lambda x: x.get("profile_count", 0), reverse=True)
+    if q:
+        data = [
+            e for e in data
+            if q in str(e["user_id"])
+            or q in (e.get("username") or "").lower()
+            or q in (e.get("first_name") or "").lower()
+        ]
+    return jsonify(entries=data, total=len(KNOWN_USERS))
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Flask Routes — Broadcast API
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+@app.route('/api/broadcast', methods=['POST'])
+@login_required
+def api_broadcast():
+    if not bot or not bot_status.get("running"):
+        return jsonify(success=False, error="বট চালু নেই — আগে বট কানেক্ট করুন।")
+    data = request.get_json(force=True)
+    text = (data.get("text") or "").strip()
+    if not text:
+        return jsonify(success=False, error="মেসেজ খালি রাখা যাবে না।")
+    with broadcast_lock:
+        if broadcast_status.get("running"):
+            return jsonify(success=False, error="একটি broadcast চলছে, শেষ হওয়া পর্যন্ত অপেক্ষা করুন।")
+    with users_lock:
+        user_ids = list(KNOWN_USERS.keys())
+    if not user_ids:
+        return jsonify(success=False, error="কোনো ইউজার রেজিস্টার্ড নেই — বটে কেউ message পাঠালে ট্র্যাক হবে।")
+    t = Thread(target=_do_broadcast, args=(text, user_ids), daemon=True)
+    t.start()
+    return jsonify(success=True, total=len(user_ids),
+                   message=f"✅ {len(user_ids)} জনকে broadcast শুরু হয়েছে।")
+
+@app.route('/api/broadcast-status', methods=['GET'])
+@login_required
+def api_broadcast_status():
+    with broadcast_lock:
+        return jsonify(**broadcast_status)
 
 @app.route('/health')
 def health():

@@ -1,3 +1,6 @@
 pyTelegramBotAPI
 Faker
 Flask
+Faker
+Flask
+pyTelegramBotAPI
