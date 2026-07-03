@@ -185,31 +185,14 @@ def load_config():
             "japan":      {"locale": "ja_JP", "code": "+81",  "digits": "XXXXXXXXXX", "is_bd": False},
         },
     }
-    # 1st priority: PostgreSQL (survives deploys)
     db_data = db_get("config")
     if db_data:
         defaults.update(db_data)
-        return defaults
-    # 2nd priority: local JSON file (local dev / Replit)
-    if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                defaults.update(data)
-        except Exception:
-            pass
     return defaults
 
 def save_config(cfg: dict):
     with config_lock:
-        # Always save to DB if available
         db_set("config", cfg)
-        # Also write local file (local dev fallback)
-        try:
-            with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-                json.dump(cfg, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            print(f"Config file save error: {e}")
 
 CONFIG = load_config()
 
@@ -343,22 +326,10 @@ def load_banned() -> dict:
     db_data = db_get("banned")
     if db_data is not None:
         return {int(k): v for k, v in db_data.items()}
-    if os.path.exists(BANNED_FILE):
-        try:
-            with open(BANNED_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                return {int(k): v for k, v in data.items()}
-        except Exception:
-            return {}
     return {}
 
 def save_banned(data: dict):
     db_set("banned", data)
-    try:
-        with open(BANNED_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
 
 BANNED_USERS: dict = load_banned()   # {user_id(int): {username, first_name, reason, timestamp}}
 
@@ -373,23 +344,10 @@ used_names_lock  = Lock()
 
 def load_used_names():
     db_data = db_get("used_names")
-    if db_data is not None:
-        return set(db_data)
-    if os.path.exists(USED_NAMES_FILE):
-        try:
-            with open(USED_NAMES_FILE, "r", encoding="utf-8") as f:
-                return set(json.load(f))
-        except Exception:
-            return set()
-    return set()
+    return set(db_data) if db_data is not None else set()
 
 def save_used_names(used: set):
     db_set("used_names", list(used))
-    try:
-        with open(USED_NAMES_FILE, "w", encoding="utf-8") as f:
-            json.dump(list(used), f, ensure_ascii=False)
-    except Exception:
-        pass
 
 USED_NAMES = load_used_names()
 
@@ -401,24 +359,10 @@ name_log_lock = Lock()
 
 def load_name_log() -> list:
     db_data = db_get("name_log")
-    if db_data is not None:
-        return db_data if isinstance(db_data, list) else []
-    if os.path.exists(NAME_LOG_FILE):
-        try:
-            with open(NAME_LOG_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                return data if isinstance(data, list) else []
-        except Exception:
-            return []
-    return []
+    return db_data if isinstance(db_data, list) else []
 
 def save_name_log(log: list):
     db_set("name_log", log)
-    try:
-        with open(NAME_LOG_FILE, "w", encoding="utf-8") as f:
-            json.dump(log, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
 
 NAME_LOG: list = load_name_log()
 
@@ -446,22 +390,10 @@ def load_users() -> dict:
     db_data = db_get("users")
     if db_data is not None:
         return {int(k): v for k, v in db_data.items()}
-    if os.path.exists(USERS_FILE):
-        try:
-            with open(USERS_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                return {int(k): v for k, v in data.items()}
-        except Exception:
-            return {}
     return {}
 
 def save_users(data: dict):
     db_set("users", data)
-    try:
-        with open(USERS_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
 
 KNOWN_USERS: dict = load_users()  # {user_id: {username, first_name, last_seen, profile_count}}
 
