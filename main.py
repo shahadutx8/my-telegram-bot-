@@ -402,20 +402,21 @@ def track_user(user_id: int, username: str | None, first_name: str | None, incre
 broadcast_status = {"running": False, "total": 0, "sent": 0, "failed": 0, "done": False, "message": ""}
 broadcast_lock = Lock()
 
-def _do_broadcast(text: str, user_ids: list):
+def _do_broadcast(text: str, user_ids: list, bot_snapshot):
     """Run in a daemon thread. Sends message to each user_id."""
     import time
-    global broadcast_status
-    with broadcast_lock:
-        broadcast_status.update({"running": True, "total": len(user_ids), "sent": 0, "failed": 0, "done": False})
     for uid in user_ids:
+        success = False
         try:
-            if bot:
-                bot.send_message(uid, text)
-                with broadcast_lock:
-                    broadcast_status["sent"] += 1
+            if bot_snapshot:
+                bot_snapshot.send_message(uid, text)
+                success = True
         except Exception:
-            with broadcast_lock:
+            pass
+        with broadcast_lock:
+            if success:
+                broadcast_status["sent"] += 1
+            else:
                 broadcast_status["failed"] += 1
         time.sleep(0.05)  # ~20 msg/s — safe for Telegram limits
     with broadcast_lock:
@@ -1076,14 +1077,17 @@ def api_broadcast():
     text = (data.get("text") or "").strip()
     if not text:
         return jsonify(success=False, error="মেসেজ খালি রাখা যাবে না।")
-    with broadcast_lock:
-        if broadcast_status.get("running"):
-            return jsonify(success=False, error="একটি broadcast চলছে, শেষ হওয়া পর্যন্ত অপেক্ষা করুন।")
     with users_lock:
         user_ids = list(KNOWN_USERS.keys())
     if not user_ids:
         return jsonify(success=False, error="কোনো ইউজার রেজিস্টার্ড নেই — বটে কেউ message পাঠালে ট্র্যাক হবে।")
-    t = Thread(target=_do_broadcast, args=(text, user_ids), daemon=True)
+    # Atomically check-and-mark running under lock, then snapshot bot reference
+    with broadcast_lock:
+        if broadcast_status.get("running"):
+            return jsonify(success=False, error="একটি broadcast চলছে, শেষ হওয়া পর্যন্ত অপেক্ষা করুন।")
+        broadcast_status.update({"running": True, "total": len(user_ids), "sent": 0, "failed": 0, "done": False})
+        bot_snapshot = bot  # capture current bot so mid-flight swaps don't affect this run
+    t = Thread(target=_do_broadcast, args=(text, user_ids, bot_snapshot), daemon=True)
     t.start()
     return jsonify(success=True, total=len(user_ids),
                    message=f"✅ {len(user_ids)} জনকে broadcast শুরু হয়েছে।")
