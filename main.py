@@ -23,56 +23,30 @@ def _hash_password(password: str) -> str:
     salt = "bot_dashboard_salt_v1"
     return hashlib.sha256(f"{salt}{password}".encode()).hexdigest()
 
-DEFAULT_FIRST_NAMES = [
-    "Arif", "Sajid", "Tanvir", "Fahim", "Rifat", "Mehedi", "Asif", "Sabbir",
-    "Nayeem", "Imran", "Sohan", "Tamim", "Emon", "Shakil", "Rony", "Hasan",
-    "Rakib", "Anik", "Alamin", "Rashed", "Zubair", "Rayhan", "Siam", "Abir",
-    "Arafat", "Jahid", "Riyad", "Sourav", "Ashik", "Akash", "Sagar", "Joy",
-    "Rahat", "Sohel", "Mizan", "Kamrul", "Farhan", "Shafiq", "Rezaul", "Belal",
-    "Tariq", "Nazmul", "Shahin", "Mahbub", "Hasnat", "Zahid", "Touhid", "Nurul",
-    "Ripon", "Shahriar", "Minhaj", "Arman", "Shaon", "Sumon", "Liton", "Babu",
-    "Tushar", "Palash", "Jewel", "Karim", "Rokon", "Jony", "Hridoy", "Sagor",
-    "Robin", "Ratul", "Pavel", "Tanveer", "Nafiz", "Tahmid", "Imon", "Adnan",
-    "Masud", "Robiul", "Shohag", "Babul", "Dulal", "Mithu", "Rubel",
-    "Riaz", "Sirajul", "Alamgir", "Mintu", "Shamsul", "Masum", "Wahid", "Rasel",
-    "Saiful", "Tomal", "Nirob", "Redwan", "Jabed", "Kawsar", "Mahfuz", "Ismail",
-    "Faisal", "Morshed", "Shorif", "Habib", "Farid", "Mamun", "Billal", "Ahad",
-    "Salman", "Samiul", "Yasin", "Iqbal", "Motiur", "Saddam", "Alam", "Badal",
-    "Mainul", "Mostafa", "Abul", "Shafiul", "Tarikul", "Atikur",
-    "Golam", "Delwar", "Jalal", "Khairul", "Obaidul", "Lutfur", "Nazrul",
-    "Rashidul", "Mujibur", "Forhad", "Anwar", "Ashraful", "Khaled", "Murad",
-    "Bazlur", "Azizul", "Nasrul", "Tajul", "Shajahan", "Enayet", "Hafizur",
-    "Quamrul", "Jahangir", "Faruk", "Feroz", "Haroon", "Idris", "Jakir",
-    "Kamal", "Lokman", "Monir", "Nadir", "Omar", "Parvez", "Quader", "Rabiul",
-    "Sultan", "Titu", "Umar", "Wasim", "Yusuf", "Zahirul", "Abubakar",
-    "Biplob", "Chanchal", "Deepu", "Emdad", "Fuad", "Gulzar", "Hanif",
-    "Jasim", "Khalid", "Liaquat", "Minhazul", "Nasim", "Obaid", "Prodip", "Rafiq",
-    "Sajjad", "Tarek", "Ujjal", "Yeakub", "Ziaul",
-]
-DEFAULT_LAST_NAMES = [
-    "Rahman", "Hasan", "Ahmed", "Faisal", "Hossain", "Islam", "Iqbal", "Chowdhury",
-    "Khan", "Ali", "Uddin", "Sarker", "Miah", "Bhuiyan", "Sheikh", "Talukder",
-    "Biswas", "Siddique", "Zaman", "Saha", "Rana", "Howlader", "Haq", "Haque",
-    "Mia", "Mollick", "Mondal", "Munshi", "Nath", "Patwary", "Prodhan", "Quazi",
-    "Roy", "Shikder", "Thakur", "Bepari", "Dewan", "Farazi", "Gazi", "Haldar",
-    "Joardar", "Kazi", "Laskar", "Majumder", "Nawab", "Pandit", "Reza", "Tarafder",
-    "Molla", "Akand", "Banik", "Das", "Gain", "Halder", "Karmakar", "Naskar",
-    "Palodhi", "Sikdar", "Bakshi", "Chakraborty", "Datta", "Ghosh", "Mandal",
-    "Podder", "Raha", "Samaddar", "Ganguly", "Bose", "Sen", "Nandi", "Dey",
-    "Choudhury", "Matin", "Karim", "Amin", "Aziz", "Bashar", "Habib", "Jamil",
-    "Kabir", "Latif", "Mazid", "Noor", "Osman", "Quasem", "Sabur", "Taher",
-    "Wahab", "Yousuf", "Zahir", "Abedin", "Bari", "Hussain", "Rashid", "Sattar",
-    "Mannan", "Momen", "Samad", "Khondker", "Morshed", "Huda", "Anwar", "Faruq",
-    "Gaffar", "Harun", "Kashem", "Mafizur", "Nizam", "Quddus", "Rahim", "Salam",
-]
-DEFAULT_PREFIXES = ["Md.", "Mohammad", "Mohammed", "Md", "M."]
+NAMES_DEFAULT_FILE = "names_default.json"
+
+def load_name_defaults() -> dict:
+    """Load default name lists from names_default.json (managed outside main.py)."""
+    try:
+        with open(NAMES_DEFAULT_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return {
+                "bd_first_names": data.get("bd_first_names", []),
+                "bd_last_names":  data.get("bd_last_names", []),
+                "bd_prefixes":    data.get("bd_prefixes", []),
+            }
+    except Exception as e:
+        print(f"⚠️  Could not load {NAMES_DEFAULT_FILE}: {e}")
+        return {"bd_first_names": [], "bd_last_names": [], "bd_prefixes": []}
+
+NAME_DEFAULTS = load_name_defaults()
 
 def load_config():
     defaults = {
         "bot_token": "", "password_hash": "",
-        "bd_first_names": DEFAULT_FIRST_NAMES[:],
-        "bd_last_names":  DEFAULT_LAST_NAMES[:],
-        "bd_prefixes":    DEFAULT_PREFIXES[:],
+        "bd_first_names": NAME_DEFAULTS["bd_first_names"][:],
+        "bd_last_names":  NAME_DEFAULTS["bd_last_names"][:],
+        "bd_prefixes":    NAME_DEFAULTS["bd_prefixes"][:],
     }
     if os.path.exists(CONFIG_FILE):
         try:
@@ -215,9 +189,9 @@ COUNTRY_DETAILS = {
 NICKNAME_SFX = ["07", "Official", "Gamer", "Pro", "Boss", "Real", "King", "BD", "X", ""]
 
 # ── Dynamic name-list accessors (always read from CONFIG) ──
-def get_first_names(): return CONFIG.get("bd_first_names", DEFAULT_FIRST_NAMES)
-def get_last_names():  return CONFIG.get("bd_last_names",  DEFAULT_LAST_NAMES)
-def get_prefixes():    return CONFIG.get("bd_prefixes",    DEFAULT_PREFIXES)
+def get_first_names(): return CONFIG.get("bd_first_names", NAME_DEFAULTS["bd_first_names"])
+def get_last_names():  return CONFIG.get("bd_last_names",  NAME_DEFAULTS["bd_last_names"])
+def get_prefixes():    return CONFIG.get("bd_prefixes",    NAME_DEFAULTS["bd_prefixes"])
 def get_total_combinations():
     return max(1, len(get_first_names()) * len(get_last_names()) * len(get_prefixes()))
 
@@ -749,12 +723,10 @@ def api_unban_user():
 def api_names_reset_defaults():
     data = request.get_json(force=True)
     kind = data.get('kind', '')
-    if kind == 'bd_first_names':
-        CONFIG['bd_first_names'] = DEFAULT_FIRST_NAMES[:]
-    elif kind == 'bd_last_names':
-        CONFIG['bd_last_names'] = DEFAULT_LAST_NAMES[:]
-    elif kind == 'bd_prefixes':
-        CONFIG['bd_prefixes'] = DEFAULT_PREFIXES[:]
+    # Reload from file each time so changes to names_default.json take effect
+    fresh_defaults = load_name_defaults()
+    if kind in ('bd_first_names', 'bd_last_names', 'bd_prefixes'):
+        CONFIG[kind] = fresh_defaults.get(kind, [])[:]
     else:
         return jsonify(success=False, error='Invalid list type.')
     save_config(CONFIG)
