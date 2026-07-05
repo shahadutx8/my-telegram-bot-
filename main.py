@@ -1,4 +1,5 @@
 import os
+import io
 import time as _time_module
 import telebot
 import random
@@ -1177,14 +1178,15 @@ def _compute_next_run(time_str: str, repeat: str, weekday: int = 0) -> str:
         candidate = base if base > now else base + timedelta(days=1)
     return candidate.strftime('%Y-%m-%dT%H:%M:%S')
 
-def _send_scheduled(sched: dict):
-    """Send a scheduled text message to all known users."""
+def _send_scheduled(sched: dict) -> bool:
+    """Send a scheduled text message to all known users.
+    Returns True if the send was attempted (bot running), False if skipped."""
     b = bot
     if not b or not bot_status.get('running'):
-        return
+        return False          # bot down — do NOT consume the schedule
     text = sched.get('text', '').strip()
     if not text:
-        return
+        return True           # nothing to send but schedule is valid
     with users_lock:
         user_ids = list(KNOWN_USERS.keys())
     for uid in user_ids:
@@ -1193,22 +1195,42 @@ def _send_scheduled(sched: dict):
         except Exception:
             pass
         _time_module.sleep(0.05)
+    return True
 
 def _run_due_schedules():
     global SCHEDULES
     now_str = _dt.now().strftime('%Y-%m-%dT%H:%M:%S')
-    changed = False
+
+    # 1. Collect due schedules under lock, then release before sending
     with schedules_lock:
+        due = [s for s in SCHEDULES
+               if s.get('active', True)
+               and s.get('next_run', '') <= now_str
+               and s.get('next_run', '')]
+
+    if not due:
+        return
+
+    # 2. Send outside the lock so API calls don't block schedule CRUD
+    executed_ids = set()
+    for sched in due:
+        try:
+            sent = _send_scheduled(sched)
+        except Exception as e:
+            print(f"[Scheduler] send error: {e}")
+            sent = False
+        if sent:
+            executed_ids.add(sched['id'])
+
+    if not executed_ids:
+        return   # bot was down for all — don't advance any state
+
+    # 3. Re-acquire lock to persist updated next_run / active
+    with schedules_lock:
+        changed = False
         for sched in SCHEDULES:
-            if not sched.get('active', True):
+            if sched['id'] not in executed_ids:
                 continue
-            next_run = sched.get('next_run', '')
-            if not next_run or now_str < next_run:
-                continue
-            try:
-                _send_scheduled(sched)
-            except Exception as e:
-                print(f"[Scheduler] send error: {e}")
             repeat = sched.get('repeat', 'once')
             if repeat == 'once':
                 sched['active'] = False
@@ -1325,10 +1347,21 @@ def api_send_media():
         except (ValueError, TypeError):
             return jsonify(success=False, error='Valid User ID দিন।')
 
+    ALLOWED_TYPES = {'text', 'photo', 'video', 'audio', 'document'}
+    if media_type not in ALLOWED_TYPES:
+        return jsonify(success=False, error=f'অবৈধ মিডিয়া টাইপ: {media_type}')
     if media_type != 'text' and not file_obj:
         return jsonify(success=False, error='ফাইল সিলেক্ট করুন।')
     if media_type == 'text' and not text_msg:
         return jsonify(success=False, error='মেসেজ লিখুন।')
+
+    # Read file into BytesIO so pyTelegramBotAPI can seek+reuse it
+    # and gets a proper .name attribute for multipart upload
+    file_buf = None
+    if file_obj and media_type != 'text':
+        raw = file_obj.read()
+        file_buf = io.BytesIO(raw)
+        file_buf.name = file_obj.filename or f'file.{media_type}'
 
     b = bot
     sent = failed = 0
@@ -1337,17 +1370,17 @@ def api_send_media():
             if media_type == 'text':
                 b.send_message(uid, text_msg)
             elif media_type == 'photo':
-                file_obj.seek(0); b.send_photo(uid, file_obj, caption=caption)
+                file_buf.seek(0); b.send_photo(uid, file_buf, caption=caption)
             elif media_type == 'video':
-                file_obj.seek(0); b.send_video(uid, file_obj, caption=caption)
+                file_buf.seek(0); b.send_video(uid, file_buf, caption=caption)
             elif media_type == 'audio':
-                file_obj.seek(0); b.send_audio(uid, file_obj, caption=caption)
+                file_buf.seek(0); b.send_audio(uid, file_buf, caption=caption)
             elif media_type == 'document':
-                file_obj.seek(0); b.send_document(uid, file_obj, caption=caption)
+                file_buf.seek(0); b.send_document(uid, file_buf, caption=caption)
             sent += 1
         except Exception as e:
             failed += 1
-            print(f"[SendMedia] uid={uid} error: {e}")
+            print(f"[SendMedia] uid={uid} type={media_type} error: {e}")
         if target == 'all':
             _time_module.sleep(0.05)
 
