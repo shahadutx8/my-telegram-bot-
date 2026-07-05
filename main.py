@@ -506,7 +506,7 @@ def generate_profile(country_key):
     username     = f"{clean_name}{random_num}"
     email        = f"{clean_name}{random_num}@gmail.com"
     phone        = generate_fake_phone(details['code'], details['digits'])
-    facebook_id  = f"{clean_name}.{suffix_num}"
+    facebook_id  = full_name
 
     return {
         "country":     country_key,
