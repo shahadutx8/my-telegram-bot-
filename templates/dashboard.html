@@ -230,6 +230,29 @@
     }
     .name-tag button:hover { opacity:1; color:#ff7070; }
 
+    /* ── Schedule cards ── */
+    .sch-card {
+      display:flex;flex-wrap:wrap;align-items:center;gap:12px;
+      background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);
+      border-radius:14px;padding:16px 20px;margin-bottom:12px;
+    }
+    .sch-card.inactive { opacity:0.5; }
+    .sch-info { flex:1;min-width:180px; }
+    .sch-text { font-size:14px;font-weight:600;color:#e0d7ff;margin-bottom:6px;word-break:break-word; }
+    .sch-meta { font-size:12px;color:#888;display:flex;gap:12px;flex-wrap:wrap; }
+    .sch-badge {
+      display:inline-block;padding:2px 9px;border-radius:12px;font-size:11px;font-weight:700;
+      background:rgba(124,99,245,0.2);color:#c4b5fd;border:1px solid rgba(124,99,245,0.35);
+    }
+    .sch-badge.daily  { background:rgba(0,200,100,0.12);color:#4ade80;border-color:rgba(0,200,100,0.3); }
+    .sch-badge.weekly { background:rgba(251,191,36,0.12);color:#fcd34d;border-color:rgba(251,191,36,0.3); }
+    .sch-badge.once   { background:rgba(90,140,255,0.12);color:#93c5fd;border-color:rgba(90,140,255,0.3); }
+    .sch-actions { display:flex;gap:8px;align-items:center;flex-shrink:0; }
+
+    /* ── Media type buttons ── */
+    .sm-type-btn { background:rgba(255,255,255,0.07);color:#aaa;border:1px solid rgba(255,255,255,0.15); }
+    .sm-type-btn.active-type { background:rgba(124,99,245,0.25);color:#c4b5fd;border-color:rgba(124,99,245,0.5); }
+
     /* ── Toast ── */
     #toast {
       position: fixed; bottom: 24px; right: 24px;
@@ -255,6 +278,8 @@
     <button class="tab-btn" onclick="switchTab('banned',this)" id="btn-banned">🚫 Banned</button>
     <button class="tab-btn" onclick="switchTab('users',this)">📊 Users</button>
     <button class="tab-btn" onclick="switchTab('broadcast',this)">📢 Broadcast</button>
+    <button class="tab-btn" onclick="switchTab('schedule',this)">📅 Schedule</button>
+    <button class="tab-btn" onclick="switchTab('sendmedia',this)">📨 Send</button>
     <button class="tab-btn" onclick="switchTab('log',this)">📜 Log</button>
     <button class="tab-btn" onclick="switchTab('settings',this)">⚙️ Settings</button>
   </div>
@@ -645,6 +670,145 @@
         <span>মোট: <strong id="bc-total" style="color:#a78bfa;">0</strong></span>
       </div>
       <p id="bc-done-msg" style="margin-top:12px;font-size:13px;color:#4ade80;display:none;">✅ Broadcast সম্পন্ন হয়েছে!</p>
+    </div>
+  </div>
+
+  <!-- ══ SCHEDULE TAB ══ -->
+  <div id="tab-schedule" class="page">
+
+    <!-- Add Schedule Form -->
+    <div class="section" style="margin-bottom:18px;">
+      <h2>📅 নতুন Schedule যোগ করুন</h2>
+      <p style="font-size:13px;color:#aaa;margin-bottom:18px;">নির্দিষ্ট সময়ে বটের মাধ্যমে সব ইউজারকে অটো মেসেজ পাঠান।</p>
+
+      <div class="form-group">
+        <label>মেসেজ লিখুন *</label>
+        <textarea id="sch-text"
+          style="width:100%;min-height:100px;padding:11px 14px;border:1px solid rgba(255,255,255,0.15);
+                 border-radius:10px;background:rgba(255,255,255,0.07);color:#fff;font-size:14px;
+                 outline:none;resize:vertical;font-family:inherit;"
+          placeholder="সব ইউজারকে যে মেসেজটি পাঠাতে চান…"></textarea>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:14px;">
+        <div class="form-group" style="margin:0;">
+          <label>সময় (HH:MM) *</label>
+          <input type="time" id="sch-time" class="names-input" style="width:100%;padding:9px 13px;color:#fff;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.18);border-radius:9px;outline:none;font-size:14px;"/>
+        </div>
+        <div class="form-group" style="margin:0;">
+          <label>পুনরাবৃত্তি *</label>
+          <select id="sch-repeat" class="names-input" style="padding:9px 13px;" onchange="toggleWeekday()">
+            <option value="daily">প্রতিদিন</option>
+            <option value="weekly">সাপ্তাহিক</option>
+            <option value="once">একবার</option>
+          </select>
+        </div>
+        <div class="form-group" style="margin:0;" id="sch-weekday-wrap" style="display:none;">
+          <label>বার</label>
+          <select id="sch-weekday" class="names-input" style="padding:9px 13px;">
+            <option value="0">সোমবার</option>
+            <option value="1">মঙ্গলবার</option>
+            <option value="2">বুধবার</option>
+            <option value="3">বৃহস্পতিবার</option>
+            <option value="4">শুক্রবার</option>
+            <option value="5">শনিবার</option>
+            <option value="6">রবিবার</option>
+          </select>
+        </div>
+      </div>
+
+      <button class="btn btn-purple" onclick="addSchedule()">✅ Schedule যোগ করুন</button>
+      <div class="form-msg" id="sch-msg"></div>
+    </div>
+
+    <!-- Schedule List -->
+    <div class="section" style="padding:0;overflow:hidden;">
+      <div style="padding:16px 22px;border-bottom:1px solid rgba(255,255,255,0.08);display:flex;align-items:center;justify-content:space-between;">
+        <h2 style="margin:0;font-size:16px;">📋 সক্রিয় Schedules</h2>
+        <button class="btn btn-sm btn-blue" onclick="loadSchedules()">🔄 Refresh</button>
+      </div>
+      <div id="sch-list" style="padding:16px 22px;">
+        <p style="color:#666;font-size:14px;text-align:center;padding:30px;">লোড হচ্ছে…</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ SEND MEDIA TAB ══ -->
+  <div id="tab-sendmedia" class="page">
+    <div class="section" style="margin-bottom:18px;">
+      <h2>📨 নির্দিষ্ট ইউজারকে মেসেজ / মিডিয়া পাঠান</h2>
+      <p style="font-size:13px;color:#aaa;margin-bottom:18px;">টেক্সট, ছবি, ভিডিও, অডিও বা যেকোনো ফাইল পাঠান — একজনকে বা সবাইকে।</p>
+
+      <!-- Target -->
+      <div class="form-group">
+        <label>কাকে পাঠাবেন?</label>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:14px;padding:10px 18px;border-radius:10px;border:1px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.05);">
+            <input type="radio" name="sm-target" value="user" checked onchange="toggleTarget()" style="accent-color:#7c63f5;width:16px;height:16px;"> নির্দিষ্ট ইউজার
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:14px;padding:10px 18px;border-radius:10px;border:1px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.05);">
+            <input type="radio" name="sm-target" value="all" onchange="toggleTarget()" style="accent-color:#7c63f5;width:16px;height:16px;"> সব ইউজার
+          </label>
+        </div>
+      </div>
+
+      <div class="form-group" id="sm-uid-wrap">
+        <label>Telegram User ID *</label>
+        <input type="number" id="sm-userid" placeholder="e.g. 123456789" class="names-input" style="max-width:260px;"/>
+        <div style="margin-top:6px;font-size:12px;color:#666;">Users ট্যাব থেকে User ID কপি করুন।</div>
+      </div>
+
+      <!-- Media Type -->
+      <div class="form-group">
+        <label>মিডিয়া টাইপ</label>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          <button class="btn btn-sm sm-type-btn active-type" onclick="setMediaType('text',this)">💬 টেক্সট</button>
+          <button class="btn btn-sm sm-type-btn" onclick="setMediaType('photo',this)">🖼️ ছবি</button>
+          <button class="btn btn-sm sm-type-btn" onclick="setMediaType('video',this)">🎬 ভিডিও</button>
+          <button class="btn btn-sm sm-type-btn" onclick="setMediaType('audio',this)">🎵 অডিও</button>
+          <button class="btn btn-sm sm-type-btn" onclick="setMediaType('document',this)">📄 ফাইল</button>
+        </div>
+      </div>
+
+      <!-- Text message area -->
+      <div class="form-group" id="sm-text-wrap">
+        <label>মেসেজ লিখুন *</label>
+        <textarea id="sm-text"
+          style="width:100%;min-height:100px;padding:11px 14px;border:1px solid rgba(255,255,255,0.15);
+                 border-radius:10px;background:rgba(255,255,255,0.07);color:#fff;font-size:14px;
+                 outline:none;resize:vertical;font-family:inherit;"
+          placeholder="যে মেসেজটি পাঠাতে চান…"></textarea>
+      </div>
+
+      <!-- File upload area -->
+      <div class="form-group" id="sm-file-wrap" style="display:none;">
+        <label>ফাইল সিলেক্ট করুন *</label>
+        <div id="sm-drop-zone" style="border:2px dashed rgba(124,99,245,0.4);border-radius:12px;padding:30px;text-align:center;cursor:pointer;transition:border-color 0.2s;background:rgba(124,99,245,0.05);"
+          onclick="document.getElementById('sm-file').click()"
+          ondragover="event.preventDefault();this.style.borderColor='#7c63f5'"
+          ondragleave="this.style.borderColor='rgba(124,99,245,0.4)'"
+          ondrop="handleFileDrop(event)">
+          <div style="font-size:32px;margin-bottom:8px;" id="sm-drop-icon">📂</div>
+          <div style="color:#aaa;font-size:14px;">ফাইল drag করুন অথবা <span style="color:#a78bfa;font-weight:700;">এখানে ক্লিক করুন</span></div>
+          <div id="sm-file-name" style="margin-top:10px;font-size:13px;color:#4ade80;font-weight:600;"></div>
+        </div>
+        <input type="file" id="sm-file" style="display:none;" onchange="onFileSelected(this)"/>
+      </div>
+
+      <!-- Caption for media -->
+      <div class="form-group" id="sm-caption-wrap" style="display:none;">
+        <label>Caption (optional)</label>
+        <input type="text" id="sm-caption" placeholder="মিডিয়ার সাথে ক্যাপশন লিখুন…" class="names-input"/>
+      </div>
+
+      <button class="btn btn-purple" onclick="sendMedia()" id="sm-send-btn">📨 পাঠান</button>
+      <div class="form-msg" id="sm-msg"></div>
+    </div>
+
+    <!-- Recent sends log -->
+    <div class="section">
+      <h2>📋 পাঠানো ইতিহাস</h2>
+      <div id="sm-history" style="font-size:13px;color:#666;">এই session-এ কিছু পাঠানো হয়নি।</div>
     </div>
   </div>
 
@@ -1133,6 +1297,8 @@ function switchTab(name, btn) {
   if (name === 'generate')  loadCountrySelect();
   if (name === 'users')     loadUsers();
   if (name === 'broadcast') loadBroadcastUserCount();
+  if (name === 'schedule')  loadSchedules();
+  if (name === 'sendmedia') loadSendMediaUsers();
 }
 
 // ── Countries management ──
@@ -1589,9 +1755,207 @@ async function saveFieldsConfig() {
   if (data.success) toast(data.message);
 }
 
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Schedule Tab
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+const WEEKDAY_NAMES = ['সোমবার','মঙ্গলবার','বুধবার','বৃহস্পতিবার','শুক্রবার','শনিবার','রবিবার'];
+
+function toggleWeekday() {
+  const repeat = document.getElementById('sch-repeat').value;
+  document.getElementById('sch-weekday-wrap').style.display = repeat === 'weekly' ? '' : 'none';
+}
+
+async function addSchedule() {
+  const text    = (document.getElementById('sch-text').value || '').trim();
+  const time    = (document.getElementById('sch-time').value || '').trim();
+  const repeat  = document.getElementById('sch-repeat').value;
+  const weekday = document.getElementById('sch-weekday').value;
+  if (!text) { showMsg('sch-msg', 'মেসেজ লিখুন।', true); return; }
+  if (!time) { showMsg('sch-msg', 'সময় দিন।', true); return; }
+  const data = await apiPost('/api/schedules', { text, time, repeat, weekday: parseInt(weekday) });
+  if (!data) return;
+  if (!data.success) { showMsg('sch-msg', data.error, true); return; }
+  showMsg('sch-msg', data.message, false);
+  document.getElementById('sch-text').value = '';
+  document.getElementById('sch-time').value = '';
+  toast('✅ Schedule যোগ হয়েছে!');
+  loadSchedules();
+}
+
+async function loadSchedules() {
+  try {
+    const res = await fetch('/api/schedules');
+    if (!res.ok) { return; }
+    const data = await res.json();
+    renderSchedules(data.schedules || []);
+  } catch {}
+}
+
+function renderSchedules(list) {
+  const el = document.getElementById('sch-list');
+  if (!list.length) {
+    el.innerHTML = '<p style="color:#666;font-size:14px;text-align:center;padding:30px;">কোনো schedule নেই। উপরে যোগ করুন।</p>';
+    return;
+  }
+  el.innerHTML = '';
+  list.forEach(s => {
+    const card = document.createElement('div');
+    card.className = 'sch-card' + (s.active ? '' : ' inactive');
+    card.dataset.id = s.id;
+
+    const repeatLabel = s.repeat === 'daily' ? 'প্রতিদিন' : s.repeat === 'weekly' ? `সাপ্তাহিক (${WEEKDAY_NAMES[s.weekday||0]})` : 'একবার';
+    const nextRun = s.next_run ? s.next_run.replace('T',' ') : '—';
+
+    card.innerHTML = `
+      <div class="sch-info">
+        <div class="sch-text">${escHtml(s.text)}</div>
+        <div class="sch-meta">
+          <span>⏰ ${s.time}</span>
+          <span class="sch-badge ${s.repeat}">${repeatLabel}</span>
+          <span>📅 পরের রান: ${nextRun}</span>
+          ${s.active ? '<span style="color:#4ade80">● চালু</span>' : '<span style="color:#f87171">● বন্ধ</span>'}
+        </div>
+      </div>
+      <div class="sch-actions">
+        <button class="btn btn-sm ${s.active ? 'btn-orange' : 'btn-green'}" onclick="toggleSchedule('${s.id}',this.closest('.sch-card'))">
+          ${s.active ? '⏸ বন্ধ করুন' : '▶ চালু করুন'}
+        </button>
+        <button class="btn btn-sm btn-red" onclick="deleteSchedule('${s.id}',this.closest('.sch-card'))">🗑️</button>
+      </div>`;
+    el.appendChild(card);
+  });
+}
+
+function escHtml(str) {
+  const d = document.createElement('div'); d.textContent = str; return d.innerHTML;
+}
+
+async function toggleSchedule(id, cardEl) {
+  const data = await apiPost('/api/schedules/toggle', { id });
+  if (!data) return;
+  if (!data.success) { toast(data.error, true); return; }
+  toast(data.message);
+  loadSchedules();
+}
+
+async function deleteSchedule(id, cardEl) {
+  if (!confirm('এই schedule মুছে ফেলবেন?')) return;
+  const data = await apiPost('/api/schedules/delete', { id });
+  if (!data) return;
+  if (!data.success) { toast(data.error, true); return; }
+  toast(data.message);
+  if (cardEl) cardEl.remove();
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Send Media Tab
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+let _smType = 'text';
+let _smSendHistory = [];
+
+function toggleTarget() {
+  const target = document.querySelector('input[name="sm-target"]:checked').value;
+  document.getElementById('sm-uid-wrap').style.display = target === 'user' ? '' : 'none';
+}
+
+function setMediaType(type, btn) {
+  _smType = type;
+  document.querySelectorAll('.sm-type-btn').forEach(b => b.classList.remove('active-type'));
+  btn.classList.add('active-type');
+  document.getElementById('sm-text-wrap').style.display    = type === 'text' ? '' : 'none';
+  document.getElementById('sm-file-wrap').style.display    = type !== 'text' ? '' : 'none';
+  document.getElementById('sm-caption-wrap').style.display = type !== 'text' ? '' : 'none';
+  // Update drop zone icon
+  const icons = {photo:'🖼️', video:'🎬', audio:'🎵', document:'📄'};
+  const icon = document.getElementById('sm-drop-icon');
+  if (icon && icons[type]) icon.textContent = icons[type];
+}
+
+function onFileSelected(input) {
+  const file = input.files[0];
+  if (file) document.getElementById('sm-file-name').textContent = '✅ ' + file.name;
+}
+
+function handleFileDrop(event) {
+  event.preventDefault();
+  event.currentTarget.style.borderColor = 'rgba(124,99,245,0.4)';
+  const file = event.dataTransfer.files[0];
+  if (!file) return;
+  const inp = document.getElementById('sm-file');
+  const dt = new DataTransfer();
+  dt.items.add(file);
+  inp.files = dt.files;
+  document.getElementById('sm-file-name').textContent = '✅ ' + file.name;
+}
+
+async function loadSendMediaUsers() {
+  // Pre-populate user ID if users tab data is available
+}
+
+async function sendMedia() {
+  const target  = document.querySelector('input[name="sm-target"]:checked').value;
+  const userId  = (document.getElementById('sm-userid').value || '').trim();
+  const caption = (document.getElementById('sm-caption').value || '').trim();
+  const text    = (document.getElementById('sm-text').value || '').trim();
+  const fileInp = document.getElementById('sm-file');
+
+  if (target === 'user' && !userId) { showMsg('sm-msg', 'User ID দিন।', true); return; }
+  if (_smType === 'text' && !text)  { showMsg('sm-msg', 'মেসেজ লিখুন।', true); return; }
+  if (_smType !== 'text' && !fileInp.files.length) { showMsg('sm-msg', 'ফাইল সিলেক্ট করুন।', true); return; }
+
+  const btn = document.getElementById('sm-send-btn');
+  btn.disabled = true; btn.textContent = 'পাঠানো হচ্ছে…';
+
+  const fd = new FormData();
+  fd.append('type',    _smType);
+  fd.append('target',  target);
+  fd.append('user_id', userId);
+  fd.append('caption', caption);
+  fd.append('text',    text);
+  if (_smType !== 'text' && fileInp.files[0]) fd.append('file', fileInp.files[0]);
+
+  try {
+    const res  = await fetch('/api/send-media', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (!data.success) { showMsg('sm-msg', data.error, true); }
+    else {
+      showMsg('sm-msg', data.message, false);
+      toast(data.message);
+      // Log to history
+      const typeLabels = {text:'💬 টেক্সট', photo:'🖼️ ছবি', video:'🎬 ভিডিও', audio:'🎵 অডিও', document:'📄 ফাইল'};
+      _smSendHistory.unshift({
+        type: typeLabels[_smType] || _smType,
+        target: target === 'all' ? 'সব ইউজার' : `User ${userId}`,
+        sent: data.sent, failed: data.failed,
+        time: new Date().toLocaleTimeString('bn-BD')
+      });
+      renderSendHistory();
+    }
+  } catch (e) { showMsg('sm-msg', 'নেটওয়ার্ক ত্রুটি: ' + e, true); }
+
+  btn.disabled = false; btn.textContent = '📨 পাঠান';
+}
+
+function renderSendHistory() {
+  const el = document.getElementById('sm-history');
+  if (!_smSendHistory.length) {
+    el.innerHTML = '<span style="color:#666">এই session-এ কিছু পাঠানো হয়নি।</span>';
+    return;
+  }
+  el.innerHTML = _smSendHistory.slice(0, 20).map(h => `
+    <div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.05);">
+      <span style="font-size:18px">${h.type.split(' ')[0]}</span>
+      <div style="flex:1;">
+        <div style="font-size:13px;font-weight:600;color:#e0d7ff;">${h.type} → ${escHtml(h.target)}</div>
+        <div style="font-size:12px;color:#666;">✅ ${h.sent} সফল ${h.failed ? `❌ ${h.failed} ব্যর্থ` : ''} · ${h.time}</div>
+      </div>
+    </div>`).join('');
+}
+
 // ── Init on page load ──
 (async function init() {
   await loadCountrySelect();
+  toggleWeekday();
 })();
 </script>
 </body>

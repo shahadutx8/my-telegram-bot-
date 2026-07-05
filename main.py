@@ -1,4 +1,5 @@
 import os
+import time as _time_module
 import telebot
 import random
 import re
@@ -7,6 +8,7 @@ import unicodedata
 import hashlib
 import secrets as secrets_module
 from faker import Faker
+from datetime import datetime as _dt, timedelta
 from werkzeug.security import generate_password_hash, check_password_hash as _wz_check
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for
 from threading import Thread, Lock
@@ -1143,6 +1145,217 @@ def api_broadcast_status():
     with broadcast_lock:
         return jsonify(**broadcast_status)
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Scheduled Messages
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+schedules_lock = Lock()
+
+def load_schedules() -> list:
+    db_data = db_get("schedules")
+    return db_data if isinstance(db_data, list) else []
+
+def save_schedules(data: list):
+    db_set("schedules", data)
+
+SCHEDULES: list = load_schedules()
+
+WEEKDAY_NAMES = ["সোমবার","মঙ্গলবার","বুধবার","বৃহস্পতিবার","শুক্রবার","শনিবার","রবিবার"]
+
+def _compute_next_run(time_str: str, repeat: str, weekday: int = 0) -> str:
+    """Return ISO timestamp of next run for this schedule."""
+    now = _dt.now()
+    h, m = map(int, time_str.split(':'))
+    base = now.replace(hour=h, minute=m, second=0, microsecond=0)
+    if repeat in ('once', 'daily'):
+        candidate = base if base > now else base + timedelta(days=1)
+    elif repeat == 'weekly':
+        days_ahead = (int(weekday) - now.weekday()) % 7
+        candidate = base + timedelta(days=days_ahead)
+        if candidate <= now:
+            candidate += timedelta(weeks=1)
+    else:
+        candidate = base if base > now else base + timedelta(days=1)
+    return candidate.strftime('%Y-%m-%dT%H:%M:%S')
+
+def _send_scheduled(sched: dict):
+    """Send a scheduled text message to all known users."""
+    b = bot
+    if not b or not bot_status.get('running'):
+        return
+    text = sched.get('text', '').strip()
+    if not text:
+        return
+    with users_lock:
+        user_ids = list(KNOWN_USERS.keys())
+    for uid in user_ids:
+        try:
+            b.send_message(uid, text)
+        except Exception:
+            pass
+        _time_module.sleep(0.05)
+
+def _run_due_schedules():
+    global SCHEDULES
+    now_str = _dt.now().strftime('%Y-%m-%dT%H:%M:%S')
+    changed = False
+    with schedules_lock:
+        for sched in SCHEDULES:
+            if not sched.get('active', True):
+                continue
+            next_run = sched.get('next_run', '')
+            if not next_run or now_str < next_run:
+                continue
+            try:
+                _send_scheduled(sched)
+            except Exception as e:
+                print(f"[Scheduler] send error: {e}")
+            repeat = sched.get('repeat', 'once')
+            if repeat == 'once':
+                sched['active'] = False
+            elif repeat == 'daily':
+                sched['next_run'] = _compute_next_run(sched['time'], 'daily')
+            elif repeat == 'weekly':
+                sched['next_run'] = _compute_next_run(sched['time'], 'weekly', sched.get('weekday', 0))
+            changed = True
+        if changed:
+            save_schedules(SCHEDULES)
+
+def _scheduler_loop():
+    """Background daemon: checks every 30 s for due schedules."""
+    while True:
+        _time_module.sleep(30)
+        try:
+            _run_due_schedules()
+        except Exception as e:
+            print(f"[Scheduler] loop error: {e}")
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Flask Routes — Schedules API
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+@app.route('/api/schedules', methods=['GET'])
+@login_required
+def api_schedules_get():
+    with schedules_lock:
+        return jsonify(schedules=list(SCHEDULES))
+
+@app.route('/api/schedules', methods=['POST'])
+@login_required
+def api_schedules_add():
+    data      = request.get_json(force=True)
+    text      = (data.get('text') or '').strip()
+    time_str  = (data.get('time') or '').strip()
+    repeat    = data.get('repeat', 'daily')
+    weekday   = int(data.get('weekday', 0) or 0)
+    if not text:
+        return jsonify(success=False, error='মেসেজ খালি রাখা যাবে না।')
+    if not time_str or ':' not in time_str:
+        return jsonify(success=False, error='সময় সঠিকভাবে দিন (HH:MM)।')
+    if repeat not in ('once', 'daily', 'weekly'):
+        return jsonify(success=False, error='Invalid repeat type.')
+    next_run = _compute_next_run(time_str, repeat, weekday)
+    sched = {
+        'id':         secrets_module.token_hex(8),
+        'text':       text,
+        'time':       time_str,
+        'repeat':     repeat,
+        'weekday':    weekday,
+        'next_run':   next_run,
+        'active':     True,
+        'created_at': _dt.now().strftime('%Y-%m-%dT%H:%M:%S'),
+    }
+    with schedules_lock:
+        SCHEDULES.append(sched)
+        save_schedules(SCHEDULES)
+    return jsonify(success=True, schedule=sched,
+                   message=f'✅ Schedule যোগ হয়েছে! পরবর্তী রান: {next_run}')
+
+@app.route('/api/schedules/delete', methods=['POST'])
+@login_required
+def api_schedules_delete():
+    data = request.get_json(force=True)
+    sid  = data.get('id', '')
+    with schedules_lock:
+        idx = next((i for i, s in enumerate(SCHEDULES) if s['id'] == sid), None)
+        if idx is None:
+            return jsonify(success=False, error='Schedule পাওয়া যায়নি।')
+        SCHEDULES.pop(idx)
+        save_schedules(SCHEDULES)
+    return jsonify(success=True, message='🗑️ Schedule মুছে ফেলা হয়েছে।')
+
+@app.route('/api/schedules/toggle', methods=['POST'])
+@login_required
+def api_schedules_toggle():
+    data = request.get_json(force=True)
+    sid  = data.get('id', '')
+    with schedules_lock:
+        sched = next((s for s in SCHEDULES if s['id'] == sid), None)
+        if not sched:
+            return jsonify(success=False, error='Schedule পাওয়া যায়নি।')
+        sched['active'] = not sched.get('active', True)
+        if sched['active']:
+            sched['next_run'] = _compute_next_run(
+                sched['time'], sched['repeat'], sched.get('weekday', 0))
+        save_schedules(SCHEDULES)
+    return jsonify(success=True, active=sched['active'],
+                   message=f"✅ {'চালু' if sched['active'] else 'বন্ধ'} করা হয়েছে।")
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Flask Routes — Send Media to User(s)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+@app.route('/api/send-media', methods=['POST'])
+@login_required
+def api_send_media():
+    if not bot or not bot_status.get('running'):
+        return jsonify(success=False, error='বট চালু নেই — আগে বট কানেক্ট করুন।')
+    media_type   = request.form.get('type', 'text')
+    target       = request.form.get('target', 'user')
+    user_id_str  = request.form.get('user_id', '').strip()
+    caption      = request.form.get('caption', '').strip() or None
+    text_msg     = request.form.get('text', '').strip()
+    file_obj     = request.files.get('file')
+
+    if target == 'all':
+        with users_lock:
+            user_ids = list(KNOWN_USERS.keys())
+        if not user_ids:
+            return jsonify(success=False, error='কোনো ইউজার রেজিস্টার্ড নেই।')
+    else:
+        try:
+            user_ids = [int(user_id_str)]
+        except (ValueError, TypeError):
+            return jsonify(success=False, error='Valid User ID দিন।')
+
+    if media_type != 'text' and not file_obj:
+        return jsonify(success=False, error='ফাইল সিলেক্ট করুন।')
+    if media_type == 'text' and not text_msg:
+        return jsonify(success=False, error='মেসেজ লিখুন।')
+
+    b = bot
+    sent = failed = 0
+    for uid in user_ids:
+        try:
+            if media_type == 'text':
+                b.send_message(uid, text_msg)
+            elif media_type == 'photo':
+                file_obj.seek(0); b.send_photo(uid, file_obj, caption=caption)
+            elif media_type == 'video':
+                file_obj.seek(0); b.send_video(uid, file_obj, caption=caption)
+            elif media_type == 'audio':
+                file_obj.seek(0); b.send_audio(uid, file_obj, caption=caption)
+            elif media_type == 'document':
+                file_obj.seek(0); b.send_document(uid, file_obj, caption=caption)
+            sent += 1
+        except Exception as e:
+            failed += 1
+            print(f"[SendMedia] uid={uid} error: {e}")
+        if target == 'all':
+            _time_module.sleep(0.05)
+
+    msg = f'✅ {sent} জনকে পাঠানো হয়েছে।'
+    if failed:
+        msg += f' ❌ {failed} টি ব্যর্থ।'
+    return jsonify(success=True, sent=sent, failed=failed, message=msg)
+
 @app.route('/health')
 def health():
     return "Profile Generator Bot is alive 24/7!"
@@ -1155,6 +1368,10 @@ def run_web_server():
     app.run(host='0.0.0.0', port=port, use_reloader=False)
 
 if __name__ == '__main__':
+    # Start background scheduler
+    _sched_thread = Thread(target=_scheduler_loop, daemon=True)
+    _sched_thread.start()
+
     # Auto-start bot if token saved in config
     saved_token = CONFIG.get("bot_token", "").strip()
     if not saved_token:
