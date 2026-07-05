@@ -7,6 +7,7 @@ import unicodedata
 import hashlib
 import secrets as secrets_module
 from faker import Faker
+from werkzeug.security import generate_password_hash, check_password_hash as _wz_check
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for
 from threading import Thread, Lock
 from functools import wraps
@@ -81,9 +82,8 @@ CONFIG_FILE = "config.json"
 config_lock = Lock()
 
 def _hash_password(password: str) -> str:
-    """Return a salted SHA-256 hex digest of the password."""
-    salt = "bot_dashboard_salt_v1"
-    return hashlib.sha256(f"{salt}{password}".encode()).hexdigest()
+    """Return a Werkzeug scrypt/PBKDF2 hash of the password."""
+    return generate_password_hash(password)
 
 NAMES_DEFAULT_FILE = "names_default.json"
 
@@ -227,8 +227,24 @@ def format_num(value):
         return value
 
 # ── Auth helpers ──
+def _is_legacy_hash(h: str) -> bool:
+    """Detect the old static-salt SHA-256 hex digest (64 hex chars, no $ prefix)."""
+    return bool(h) and len(h) == 64 and all(c in '0123456789abcdef' for c in h)
+
+def _legacy_hash(password: str) -> str:
+    salt = "bot_dashboard_salt_v1"
+    return hashlib.sha256(f"{salt}{password}".encode()).hexdigest()
+
 def check_password(plain: str) -> bool:
-    return _hash_password(plain) == CONFIG.get("password_hash", "")
+    stored = CONFIG.get("password_hash", "")
+    if _is_legacy_hash(stored):
+        if _legacy_hash(plain) != stored:
+            return False
+        # Migrate to secure hash on successful login
+        CONFIG["password_hash"] = _hash_password(plain)
+        save_config(CONFIG)
+        return True
+    return _wz_check(stored, plain)
 
 def login_required(f):
     @wraps(f)
@@ -579,6 +595,10 @@ def register_handlers(b: telebot.TeleBot):
                 "🚫 আপনাকে এই বট থেকে ব্যান করা হয়েছে।\n"
                 "আপনি আর এই বট ব্যবহার করতে পারবেন না।"
             )
+            return
+
+        # Ignore non-text updates (stickers, photos, voice, etc.)
+        if not message.text:
             return
 
         country_input   = message.text.strip().lower()
