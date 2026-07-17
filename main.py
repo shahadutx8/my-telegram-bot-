@@ -418,7 +418,7 @@ def is_banned(user_id: int) -> bool:
     return user_id in BANNED_USERS
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# Persistent Used Names
+# Persistent Used Names  (BD + non-BD, all in one set)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 USED_NAMES_FILE  = "used_names.json"
 used_names_lock  = Lock()
@@ -431,6 +431,34 @@ def save_used_names(used: set):
     db_set("used_names", list(used))
 
 USED_NAMES = load_used_names()
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Persistent Used Phones  (global uniqueness)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+used_phones_lock = Lock()
+
+def load_used_phones() -> set:
+    db_data = db_get("used_phones")
+    return set(db_data) if db_data is not None else set()
+
+def save_used_phones(used: set):
+    db_set("used_phones", list(used))
+
+USED_PHONES: set = load_used_phones()
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Persistent Used Usernames  (global uniqueness)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+used_usernames_lock = Lock()
+
+def load_used_usernames() -> set:
+    db_data = db_get("used_usernames")
+    return set(db_data) if db_data is not None else set()
+
+def save_used_usernames(used: set):
+    db_set("used_usernames", list(used))
+
+USED_USERNAMES: set = load_used_usernames()
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Name-Usage Log  (who got which BD name + when)
@@ -605,36 +633,69 @@ def clean_to_english(text):
     )
 
 def generate_profile(country_key):
+    global USED_PHONES, USED_USERNAMES
     country_details = get_country_details()
     if country_key not in country_details:
         return None
     details = country_details[country_key]
 
+    # ── 1. Unique full name ──────────────────────────────────────
     if details['is_bd']:
         full_name = generate_unique_bd_name()
     else:
         fake = Faker(details['locale'])
-        full_name = clean_to_english(fake.name_male())
+        # Retry until we get a name no other user has received
+        with used_names_lock:
+            for _ in range(200):
+                candidate = clean_to_english(fake.name_male())
+                if candidate not in USED_NAMES:
+                    full_name = candidate
+                    USED_NAMES.add(full_name)
+                    save_used_names(USED_NAMES)
+                    break
+            else:
+                # Safety valve: use as-is (extremely rare edge case)
+                full_name = clean_to_english(fake.name_male())
 
-    # Derive nickname from original name tokens BEFORE stripping
-    tokens     = full_name.split()
-    nick_base  = re.sub(r'[^a-zA-Z]', '', tokens[-1] if len(tokens) > 1 else tokens[0])
+    # ── 2. Derive base tokens ────────────────────────────────────
+    tokens    = full_name.split()
+    nick_base = re.sub(r'[^a-zA-Z]', '', tokens[-1] if len(tokens) > 1 else tokens[0])
     if not nick_base:
         nick_base = "User"
 
     clean_name = re.sub(r'[^a-zA-Z0-9]', '', full_name).lower()
     if not clean_name:
-        clean_name = "user" + str(random.randint(100, 999))
+        clean_name = "user" + str(random.randint(1000, 9999))
 
-    random_num   = random.randint(1000, 9999)
-    suffix_num   = random.randint(10, 99)
-    sfx_list     = get_nickname_sfx()
-    sfx          = random.choice(sfx_list) if sfx_list else ""
-    nickname     = f"{nick_base.capitalize()}{sfx}" if sfx else nick_base.capitalize()
-    username     = f"{clean_name}{random_num}"
-    email        = f"{clean_name}{random_num}@gmail.com"
-    phone        = generate_fake_phone(details['code'], details['digits'])
-    facebook_id  = full_name
+    sfx_list = get_nickname_sfx()
+    sfx      = random.choice(sfx_list) if sfx_list else ""
+    nickname = f"{nick_base.capitalize()}{sfx}" if sfx else nick_base.capitalize()
+    facebook_id = full_name
+
+    # ── 3. Unique username (→ email) ─────────────────────────────
+    with used_usernames_lock:
+        for _ in range(10_000):
+            rnum     = random.randint(100_000, 999_999)   # 6-digit suffix
+            username = f"{clean_name}{rnum}"
+            if username not in USED_USERNAMES:
+                USED_USERNAMES.add(username)
+                save_used_usernames(USED_USERNAMES)
+                break
+        else:
+            rnum     = random.randint(100_000, 999_999)
+            username = f"{clean_name}{rnum}"
+
+    email = f"{username}@gmail.com"
+
+    # ── 4. Unique phone ──────────────────────────────────────────
+    with used_phones_lock:
+        for _ in range(10_000):
+            phone = generate_fake_phone(details['code'], details['digits'])
+            if phone not in USED_PHONES:
+                USED_PHONES.add(phone)
+                save_used_phones(USED_PHONES)
+                break
+        # If somehow all tried phones are taken, last generated value is used
 
     return {
         "country":     country_key,
