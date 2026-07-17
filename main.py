@@ -216,36 +216,49 @@ if not CONFIG.get("password_hash"):
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 _GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 
-def generate_ai_bio(profile: dict) -> str:
-    """Generate a unique realistic fake bio using Gemini."""
+def generate_ai_name(country_key: str = "bangladesh") -> str | None:
+    """Use Gemini to generate a realistic name, guided by the bot's own name lists."""
     if not _GEMINI_KEY:
-        return "⚠️ GEMINI_API_KEY সেট করা নেই। Dashboard → Secrets-এ key যোগ করুন।"
-    country = profile.get("country", "").capitalize()
-    name    = profile.get("full_name", "")
-    is_bd   = profile.get("country", "").lower() in ("bangladesh", "bd")
-    lang_note = "বাংলায় লিখুন (Bengali script)।" if is_bd else "Write in English."
+        return None
+    is_bd = country_key.lower() in ("bangladesh", "bd")
 
-    prompt = (
-        f"নিচের তথ্য দিয়ে একটি কাল্পনিক ব্যক্তির realistic fake personal bio তৈরি করো:\n"
-        f"নাম: {name}\n"
-        f"দেশ: {country}\n\n"
-        f"নির্দেশনা:\n"
-        f"- ৩-৪ বাক্যের একটি believable biography লিখো যেন এটি সত্যিকারের কারও profile description।\n"
-        f"- পেশা, অবস্থান এবং ব্যক্তিগত আগ্রহ উল্লেখ করো (সব কাল্পনিক)।\n"
-        f"- কোনো email, phone number বা link রাখবে না।\n"
-        f"- প্রতিটি bio আলাদা ও unique হতে হবে — কোনো generic template নয়।\n"
-        f"- {lang_note}\n"
-        f"- শুধু bio text দাও, আর কিছু নয়।"
-    )
+    if is_bd:
+        # Feed Gemini a random sample of our actual data as style examples
+        sample_firsts  = random.sample(get_first_names(), min(15, len(get_first_names())))
+        sample_lasts   = random.sample(get_last_names(),  min(15, len(get_last_names())))
+        prefixes       = get_prefixes()
+        prompt = (
+            "তুমি একটি Bangladeshi নাম জেনারেটর। নিচে আমাদের নামের ডেটাবেজ থেকে কিছু উদাহরণ দেওয়া হলো:\n\n"
+            f"উপসর্গ (Prefix): {', '.join(prefixes)}\n"
+            f"প্রথম নাম উদাহরণ: {', '.join(sample_firsts)}\n"
+            f"শেষ নাম উদাহরণ: {', '.join(sample_lasts)}\n\n"
+            "এই ডেটার ধরন ও ছন্দ বজায় রেখে একটি সম্পূর্ণ নতুন, realistic Bangladeshi পুরুষের নাম তৈরি করো।\n"
+            "নামটি হুবহু উদাহরণের মতো না হয়ে নতুন ও স্বাভাবিক হতে হবে।\n"
+            "ফরম্যাট: [উপসর্গ] [প্রথম নাম] [শেষ নাম]\n"
+            "শুধু নামটি দাও — আর কিছু নয়, কোনো ব্যাখ্যা নয়।"
+        )
+    else:
+        country = country_key.capitalize()
+        prompt = (
+            f"Generate a single realistic male full name from {country}.\n"
+            "The name should sound natural and authentic for that country.\n"
+            "Return only the name — no explanation, no extra text."
+        )
+
     try:
         client   = genai.Client(api_key=_GEMINI_KEY)
         response = client.models.generate_content(
             model="gemini-1.5-flash",
             contents=prompt,
         )
-        return response.text.strip()
+        name = response.text.strip().strip("\"'").strip()
+        # Sanity check: must be 2–5 words, no special chars beyond periods/spaces
+        if name and 2 <= len(name.split()) <= 5:
+            return name
+        return None
     except Exception as e:
-        return f"⚠️ AI bio generate করা সম্ভব হয়নি: {str(e)[:150]}"
+        print(f"[generate_ai_name] error: {e}")
+        return None
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Flask App Setup
@@ -655,7 +668,7 @@ def register_handlers(b: telebot.TeleBot):
             f"🇧🇩 এখন পর্যন্ত {used_count:,} টি নাম ব্যবহৃত হয়েছে।\n"
             f"✅ আরও {remaining:,} টি ইউনিক নাম বাকি আছে।\n\n"
             f"📋 /history — আগের প্রোফাইল দেখুন\n"
-            f"🤖 /bio [দেশ] — AI দিয়ে realistic bio তৈরি করুন"
+            f"🤖 /ainame [দেশ] — AI দিয়ে real-style নাম তৈরি করুন"
         )
         if is_new:
             user = message.from_user
@@ -719,68 +732,86 @@ def register_handlers(b: telebot.TeleBot):
         lines.append("💡 টেক্সটে ট্যাপ করলেই কপি হয়ে যাবে।")
         b.reply_to(message, "\n".join(lines), parse_mode="Markdown")
 
-    @b.message_handler(commands=['bio'])
-    def send_bio(message):
+    @b.message_handler(commands=['ainame'])
+    def send_ai_name(message):
         track_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
 
-        # Parse optional country argument: /bio bangladesh
-        parts       = message.text.strip().split(maxsplit=1)
-        country_arg = parts[1].strip().lower() if len(parts) > 1 else None
+        if is_banned(message.from_user.id):
+            b.reply_to(message, "🚫 আপনাকে এই বট থেকে ব্যান করা হয়েছে।")
+            return
 
-        if country_arg:
-            country_details = get_country_details()
-            if country_arg not in country_details:
-                keys = ", ".join(k.capitalize() for k in country_details.keys())
-                b.reply_to(message, f"⚠️ অজানা দেশ।\nলিখুন: {keys}")
-                return
+        if not _GEMINI_KEY:
+            b.reply_to(message, "⚠️ AI name generator এখন উপলব্ধ নেই।")
+            return
+
+        parts       = message.text.strip().split(maxsplit=1)
+        country_arg = parts[1].strip().lower() if len(parts) > 1 else "bangladesh"
+
+        country_details = get_country_details()
+        if country_arg not in country_details:
+            keys = ", ".join(k.capitalize() for k in country_details.keys())
+            b.reply_to(message, f"⚠️ অজানা দেশ।\nলিখুন: {keys}")
+            return
+
+        wait_msg = b.reply_to(message, "🤖 AI দিয়ে নাম তৈরি হচ্ছে, একটু অপেক্ষা করুন…")
+
+        def _do_ainame():
+            ai_name = generate_ai_name(country_arg)
+
+            # Fall back to regular generation if AI fails
             profile = generate_profile(country_arg)
             if not profile:
+                try:
+                    b.delete_message(message.chat.id, wait_msg.message_id)
+                except Exception:
+                    pass
                 b.reply_to(message, "⚠️ প্রোফাইল তৈরি করা সম্ভব হয়নি।")
                 return
-            # Save to personal history
+
+            if ai_name:
+                # Overwrite name fields with AI-generated name
+                profile["full_name"]   = ai_name
+                profile["facebook_id"] = ai_name
+                clean = re.sub(r'[^a-zA-Z0-9]', '', ai_name).lower()
+                if clean:
+                    rnum = random.randint(1000, 9999)
+                    profile["username"] = f"{clean}{rnum}"
+                    profile["email"]    = f"{clean}{rnum}@gmail.com"
+                    profile["google"]   = profile["email"]
+
+            # Record in personal history
             Thread(target=record_user_profile, args=(message.from_user.id, profile), daemon=True).start()
-        else:
-            # Use the user's most recently generated profile
-            with user_profiles_lock:
-                history = list(USER_PROFILES.get(message.from_user.id, []))
-            if not history:
-                b.reply_to(message,
-                    "📭 আগে কোনো প্রোফাইল জেনারেট করা হয়নি।\n"
-                    "👉 /bio bangladesh  লিখে সরাসরি bio পান!"
-                )
-                return
-            profile = history[-1]
 
-        # Show "generating…" placeholder, then replace with result
-        wait_msg = b.reply_to(message, "🤖 AI bio তৈরি হচ্ছে, একটু অপেক্ষা করুন…")
-
-        def _do_bio():
-            bio     = generate_ai_bio(profile)
             enabled = _get_enabled_fields()
             field_lines = ""
             for key in FIELD_KEYS:
                 if key in enabled and key in profile:
                     field_lines += f"{FIELD_EMOJI[key]} {FIELD_LABELS[key]}: `{profile[key]}`\n"
 
-            dev_name = get_developer_name()
-            dev_line = f"👤 Developer: {dev_name}\n" if dev_name else ""
-            reply = (
-                f"{dev_line}"
-                f"🤖 *AI Bio — {profile.get('country','').capitalize()}*\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"{field_lines}"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"📝 *Bio:*\n{bio}\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"💡 টেক্সটে ট্যাপ করলেই কপি হয়।"
-            )
+            dev_name   = get_developer_name()
+            dev_line   = f"👤 Developer: {dev_name}\n" if dev_name else ""
+            tg         = message.from_user.username
+            tg_mention = f"@{tg}" if tg else "Not Available"
+            ai_badge   = "🤖 *AI Generated*" if ai_name else "⚡ *Auto Generated*"
+
             try:
                 b.delete_message(message.chat.id, wait_msg.message_id)
             except Exception:
                 pass
-            b.reply_to(message, reply, parse_mode="Markdown")
 
-        Thread(target=_do_bio, daemon=True).start()
+            b.reply_to(message,
+                f"{dev_line}"
+                f"{ai_badge}\n"
+                f"🆔 Your Telegram: {tg_mention}\n"
+                f"🌍 দেশ: {country_arg.capitalize()}\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"{field_lines}"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"💡 টেক্সটে ট্যাপ করলেই অটো-কপি হয়ে যাবে।",
+                parse_mode="Markdown"
+            )
+
+        Thread(target=_do_ainame, daemon=True).start()
 
     @b.message_handler(func=lambda message: True)
     def handle_all_messages(message):
