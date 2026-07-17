@@ -167,6 +167,26 @@ if NAME_DEFAULTS == {k: v[:] for k, v in _EMERGENCY_DEFAULTS.items()}:
         stacklevel=1,
     )
 
+# Default AI prompt templates — placeholders filled at runtime:
+#   BD prompt   : {prefixes}, {first_names}, {last_names}
+#   Intl prompt : {country}
+DEFAULT_AI_PROMPT_BD = (
+    "তুমি একটি Bangladeshi নাম জেনারেটর। নিচে আমাদের নামের ডেটাবেজ থেকে কিছু উদাহরণ দেওয়া হলো:\n\n"
+    "উপসর্গ (Prefix): {prefixes}\n"
+    "প্রথম নাম উদাহরণ: {first_names}\n"
+    "শেষ নাম উদাহরণ: {last_names}\n\n"
+    "এই ডেটার ধরন ও ছন্দ বজায় রেখে একটি সম্পূর্ণ নতুন, realistic Bangladeshi পুরুষের নাম তৈরি করো।\n"
+    "নামটি হুবহু উদাহরণের মতো না হয়ে নতুন ও স্বাভাবিক হতে হবে।\n"
+    "ফরম্যাট: [উপসর্গ] [প্রথম নাম] [শেষ নাম]\n"
+    "শুধু নামটি দাও — আর কিছু নয়, কোনো ব্যাখ্যা নয়।"
+)
+
+DEFAULT_AI_PROMPT_INTL = (
+    "Generate a single realistic male full name from {country}.\n"
+    "The name should sound natural and authentic for that country.\n"
+    "Return only the name — no explanation, no extra text."
+)
+
 def load_config():
     defaults = {
         "bot_token": "", "password_hash": "",
@@ -176,6 +196,8 @@ def load_config():
         "bd_prefixes":    NAME_DEFAULTS["bd_prefixes"][:],
         "admin_id":       int(os.environ.get("ADMIN_ID", "0") or "0"),
         "developer_name": os.environ.get("DEVELOPER_NAME", ""),
+        "ai_prompt_bd":   DEFAULT_AI_PROMPT_BD,
+        "ai_prompt_intl": DEFAULT_AI_PROMPT_INTL,
         "nickname_sfx": ["07", "Official", "Gamer", "Pro", "Boss", "Real", "King", "BD", "X", ""],
         "countries": {
             "bangladesh": {"locale": "en_US", "code": "+880", "digits": ["13XXXXXXXX", "14XXXXXXXX", "15XXXXXXXX", "16XXXXXXXX", "19XXXXXXXX"], "is_bd": True},
@@ -217,32 +239,34 @@ if not CONFIG.get("password_hash"):
 _GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 
 def generate_ai_name(country_key: str = "bangladesh") -> str | None:
-    """Use Gemini to generate a realistic name, guided by the bot's own name lists."""
+    """Use Gemini to generate a realistic name, guided by the bot's own name lists.
+    Prompts are loaded from CONFIG so they can be customised from the dashboard.
+    Supported placeholders:
+      BD prompt   — {prefixes}, {first_names}, {last_names}
+      Intl prompt — {country}
+    """
     if not _GEMINI_KEY:
         return None
     is_bd = country_key.lower() in ("bangladesh", "bd")
 
     if is_bd:
-        # Feed Gemini a random sample of our actual data as style examples
-        sample_firsts  = random.sample(get_first_names(), min(15, len(get_first_names())))
-        sample_lasts   = random.sample(get_last_names(),  min(15, len(get_last_names())))
-        prefixes       = get_prefixes()
-        prompt = (
-            "তুমি একটি Bangladeshi নাম জেনারেটর। নিচে আমাদের নামের ডেটাবেজ থেকে কিছু উদাহরণ দেওয়া হলো:\n\n"
-            f"উপসর্গ (Prefix): {', '.join(prefixes)}\n"
-            f"প্রথম নাম উদাহরণ: {', '.join(sample_firsts)}\n"
-            f"শেষ নাম উদাহরণ: {', '.join(sample_lasts)}\n\n"
-            "এই ডেটার ধরন ও ছন্দ বজায় রেখে একটি সম্পূর্ণ নতুন, realistic Bangladeshi পুরুষের নাম তৈরি করো।\n"
-            "নামটি হুবহু উদাহরণের মতো না হয়ে নতুন ও স্বাভাবিক হতে হবে।\n"
-            "ফরম্যাট: [উপসর্গ] [প্রথম নাম] [শেষ নাম]\n"
-            "শুধু নামটি দাও — আর কিছু নয়, কোনো ব্যাখ্যা নয়।"
+        sample_firsts = random.sample(get_first_names(), min(15, len(get_first_names())))
+        sample_lasts  = random.sample(get_last_names(),  min(15, len(get_last_names())))
+        prefixes      = get_prefixes()
+        template = CONFIG.get("ai_prompt_bd") or DEFAULT_AI_PROMPT_BD
+        prompt = template.format(
+            prefixes    = ", ".join(prefixes),
+            first_names = ", ".join(sample_firsts),
+            last_names  = ", ".join(sample_lasts),
+            country     = country_key.capitalize(),   # available but rarely used in BD template
         )
     else:
-        country = country_key.capitalize()
-        prompt = (
-            f"Generate a single realistic male full name from {country}.\n"
-            "The name should sound natural and authentic for that country.\n"
-            "Return only the name — no explanation, no extra text."
+        template = CONFIG.get("ai_prompt_intl") or DEFAULT_AI_PROMPT_INTL
+        prompt = template.format(
+            country     = country_key.capitalize(),
+            prefixes    = "",   # available but not meaningful for intl
+            first_names = "",
+            last_names  = "",
         )
 
     try:
@@ -1390,6 +1414,56 @@ def api_fields_config_set():
     CONFIG["bot_reply_fields"] = valid
     save_config(CONFIG)
     return jsonify(success=True, enabled=valid, message="✅ ফিল্ড সেটিং সেভ হয়েছে!")
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Flask Routes — AI Prompt Customizer API
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+@app.route('/api/ai-prompts', methods=['GET'])
+@login_required
+def api_ai_prompts_get():
+    return jsonify(
+        bd=CONFIG.get('ai_prompt_bd', DEFAULT_AI_PROMPT_BD),
+        intl=CONFIG.get('ai_prompt_intl', DEFAULT_AI_PROMPT_INTL),
+        default_bd=DEFAULT_AI_PROMPT_BD,
+        default_intl=DEFAULT_AI_PROMPT_INTL,
+    )
+
+@app.route('/api/ai-prompts', methods=['POST'])
+@login_required
+def api_ai_prompts_set():
+    data = request.get_json(force=True)
+    changed = False
+    if 'bd' in data:
+        val = str(data['bd']).strip()
+        if not val:
+            return jsonify(success=False, error='BD prompt খালি রাখা যাবে না।')
+        CONFIG['ai_prompt_bd'] = val
+        changed = True
+    if 'intl' in data:
+        val = str(data['intl']).strip()
+        if not val:
+            return jsonify(success=False, error='International prompt খালি রাখা যাবে না।')
+        CONFIG['ai_prompt_intl'] = val
+        changed = True
+    if changed:
+        save_config(CONFIG)
+    return jsonify(success=True, message='✅ AI Prompt সেভ হয়েছে!')
+
+@app.route('/api/ai-prompts/reset', methods=['POST'])
+@login_required
+def api_ai_prompts_reset():
+    data = request.get_json(force=True)
+    kind = data.get('kind', 'both')
+    if kind in ('bd', 'both'):
+        CONFIG['ai_prompt_bd'] = DEFAULT_AI_PROMPT_BD
+    if kind in ('intl', 'both'):
+        CONFIG['ai_prompt_intl'] = DEFAULT_AI_PROMPT_INTL
+    save_config(CONFIG)
+    label = {'bd': 'BD', 'intl': 'International', 'both': 'সব'}.get(kind, 'সব')
+    return jsonify(success=True,
+                   bd=CONFIG['ai_prompt_bd'],
+                   intl=CONFIG['ai_prompt_intl'],
+                   message=f'✅ {label} prompt ডিফল্টে ফিরে গেছে!')
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Flask Routes — User stats API

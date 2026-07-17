@@ -917,6 +917,44 @@
         <div class="form-msg" id="fields-msg"></div>
       </div>
 
+      <!-- AI Prompt Customizer -->
+      <div class="settings-card" style="grid-column:1/-1;">
+        <h3>🤖 AI Prompt Customizer</h3>
+        <p style="font-size:12px;color:#aaa;margin-bottom:6px;">
+          <code style="background:rgba(255,255,255,0.07);padding:2px 6px;border-radius:4px;color:#c4b5fd;">/ainame</code> কমান্ডে Gemini-কে কী ধরনের নাম বানাতে বলবে সেটা এখানে কাস্টমাইজ করুন।
+        </p>
+        <div style="background:rgba(124,99,245,0.08);border:1px solid rgba(124,99,245,0.2);border-radius:8px;padding:12px 14px;margin-bottom:18px;font-size:12px;color:#a78bfa;line-height:1.8;">
+          <strong>Available placeholders:</strong><br>
+          🇧🇩 BD Prompt — <code style="background:rgba(0,0,0,0.3);padding:1px 5px;border-radius:3px;">{prefixes}</code> &nbsp; <code style="background:rgba(0,0,0,0.3);padding:1px 5px;border-radius:3px;">{first_names}</code> &nbsp; <code style="background:rgba(0,0,0,0.3);padding:1px 5px;border-radius:3px;">{last_names}</code> &nbsp; <code style="background:rgba(0,0,0,0.3);padding:1px 5px;border-radius:3px;">{country}</code><br>
+          🌍 Intl Prompt — <code style="background:rgba(0,0,0,0.3);padding:1px 5px;border-radius:3px;">{country}</code>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;">
+          <div>
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+              <label style="font-size:13px;font-weight:600;color:#e0d7ff;">🇧🇩 Bangladesh Prompt</label>
+              <button class="btn" style="font-size:11px;padding:3px 10px;background:rgba(255,255,255,0.06);color:#aaa;" onclick="resetAiPrompt('bd')">↩ Default</button>
+            </div>
+            <textarea id="ai-prompt-bd" rows="10"
+              style="width:100%;background:#0f0f18;border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#e0d7ff;font-size:12px;padding:10px 12px;resize:vertical;font-family:monospace;line-height:1.6;"
+              placeholder="BD prompt লিখুন…"></textarea>
+          </div>
+          <div>
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+              <label style="font-size:13px;font-weight:600;color:#e0d7ff;">🌍 International Prompt</label>
+              <button class="btn" style="font-size:11px;padding:3px 10px;background:rgba(255,255,255,0.06);color:#aaa;" onclick="resetAiPrompt('intl')">↩ Default</button>
+            </div>
+            <textarea id="ai-prompt-intl" rows="10"
+              style="width:100%;background:#0f0f18;border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#e0d7ff;font-size:12px;padding:10px 12px;resize:vertical;font-family:monospace;line-height:1.6;"
+              placeholder="International prompt লিখুন…"></textarea>
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap;align-items:center;">
+          <button class="btn btn-purple" onclick="saveAiPrompts()">💾 Save Prompts</button>
+          <button class="btn" style="background:rgba(255,255,255,0.06);color:#aaa;" onclick="resetAiPrompt('both')">↩ Reset All to Default</button>
+        </div>
+        <div class="form-msg" id="ai-prompt-msg"></div>
+      </div>
+
       <!-- Danger Zone -->
       <div class="settings-card">
         <h3>⚠️ Danger Zone</h3>
@@ -1293,7 +1331,7 @@ function switchTab(name, btn) {
   if (name === 'usage')     loadUsage();
   if (name === 'banned')    loadBanned();
   if (name === 'countries') loadCountries();
-  if (name === 'settings')  { loadBotConfigForm(); loadFieldsConfig(); }
+  if (name === 'settings')  { loadBotConfigForm(); loadFieldsConfig(); loadAiPrompts(); }
   if (name === 'generate')  loadCountrySelect();
   if (name === 'users')     loadUsers();
   if (name === 'broadcast') loadBroadcastUserCount();
@@ -1564,6 +1602,43 @@ async function changePassword() {
     toast('Password updated! Logging out...');
     setTimeout(() => window.location.href = '/logout', 2000);
   }
+}
+
+// ── AI Prompt Customizer ──
+async function loadAiPrompts() {
+  try {
+    const res = await fetch('/api/ai-prompts');
+    if (!res.ok) return;
+    const data = await res.json();
+    const bdEl   = document.getElementById('ai-prompt-bd');
+    const intlEl = document.getElementById('ai-prompt-intl');
+    if (bdEl)   bdEl.value   = data.bd   || '';
+    if (intlEl) intlEl.value = data.intl || '';
+  } catch(e) { console.error('loadAiPrompts:', e); }
+}
+
+async function saveAiPrompts() {
+  const bd   = (document.getElementById('ai-prompt-bd')   || {}).value || '';
+  const intl = (document.getElementById('ai-prompt-intl') || {}).value || '';
+  if (!bd.trim())   { showMsg('ai-prompt-msg', 'BD prompt খালি রাখা যাবে না।', true); return; }
+  if (!intl.trim()) { showMsg('ai-prompt-msg', 'International prompt খালি রাখা যাবে না।', true); return; }
+  const data = await apiPost('/api/ai-prompts', { bd, intl });
+  if (!data) return;
+  showMsg('ai-prompt-msg', data.message || data.error, !data.success);
+  if (data.success) toast('AI Prompt সেভ হয়েছে ✓');
+}
+
+async function resetAiPrompt(kind) {
+  const label = {bd:'BD', intl:'International', both:'সব'}[kind] || 'সব';
+  if (!confirm(`${label} prompt ডিফল্টে ফিরিয়ে দেবেন?`)) return;
+  const data = await apiPost('/api/ai-prompts/reset', { kind });
+  if (!data) return;
+  const bdEl   = document.getElementById('ai-prompt-bd');
+  const intlEl = document.getElementById('ai-prompt-intl');
+  if (bdEl   && data.bd)   bdEl.value   = data.bd;
+  if (intlEl && data.intl) intlEl.value = data.intl;
+  showMsg('ai-prompt-msg', data.message || data.error, !data.success);
+  if (data.success) toast(data.message);
 }
 
 // ── Reset names ──
