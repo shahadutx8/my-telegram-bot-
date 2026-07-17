@@ -290,6 +290,18 @@ def start_bot_polling(b):
     except Exception as e:
         bot_status["running"] = False
         bot_status["error"] = str(e)
+        # Notify admin about the crash
+        admin_id = get_admin_id()
+        if admin_id:
+            try:
+                b.send_message(
+                    admin_id,
+                    f"⚠️ বট unexpected ভাবে বন্ধ হয়ে গেছে!\n\n"
+                    f"🔴 Error: {str(e)[:300]}\n\n"
+                    f"Dashboard থেকে বট রিস্টার্ট করুন।"
+                )
+            except Exception:
+                pass
 
 def launch_bot(token: str):
     """Stop any existing bot and start a new one."""
@@ -416,11 +428,12 @@ def save_users(data: dict):
 
 KNOWN_USERS: dict = load_users()  # {user_id: {username, first_name, last_seen, profile_count}}
 
-def track_user(user_id: int, username: str | None, first_name: str | None, increment_count: bool = False):
-    """Upsert user into registry. Thread-safe."""
+def track_user(user_id: int, username: str | None, first_name: str | None, increment_count: bool = False) -> bool:
+    """Upsert user into registry. Thread-safe. Returns True if this is a brand-new user."""
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     with users_lock:
+        is_new = user_id not in KNOWN_USERS
         existing = KNOWN_USERS.get(user_id, {})
         KNOWN_USERS[user_id] = {
             "username":      username or existing.get("username", ""),
@@ -429,6 +442,52 @@ def track_user(user_id: int, username: str | None, first_name: str | None, incre
             "profile_count": existing.get("profile_count", 0) + (1 if increment_count else 0),
         }
         save_users(KNOWN_USERS)
+    return is_new
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Admin Notifications
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def notify_admin(text: str):
+    """Send a notification to the admin user. Silently ignores errors."""
+    admin_id = get_admin_id()
+    if not admin_id:
+        return
+    b = bot
+    if not b or not bot_status.get("running"):
+        return
+    try:
+        b.send_message(admin_id, text, parse_mode="Markdown")
+    except Exception as e:
+        print(f"[notify_admin] failed: {e}")
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Per-User Profile History
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+MAX_HISTORY_PER_USER = 10
+user_profiles_lock = Lock()
+
+def load_user_profiles() -> dict:
+    db_data = db_get("user_profiles")
+    if db_data is not None:
+        return {int(k): v for k, v in db_data.items()}
+    return {}
+
+def save_user_profiles(data: dict):
+    db_set("user_profiles", data)
+
+USER_PROFILES: dict = load_user_profiles()
+
+def record_user_profile(user_id: int, profile: dict):
+    """Append a profile snapshot to the user's history (keep last MAX_HISTORY_PER_USER)."""
+    from datetime import datetime, timezone
+    entry = {k: profile.get(k, "") for k in profile}
+    entry["timestamp"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    with user_profiles_lock:
+        history = USER_PROFILES.get(user_id, [])
+        history = history[-(MAX_HISTORY_PER_USER - 1):]
+        history.append(entry)
+        USER_PROFILES[user_id] = history
+        save_user_profiles(USER_PROFILES)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Broadcast state (in-memory)
@@ -549,7 +608,7 @@ def register_handlers(b: telebot.TeleBot):
 
     @b.message_handler(commands=['start'])
     def send_welcome(message):
-        track_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
+        is_new = track_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
         used_count   = len(USED_NAMES)
         remaining    = get_total_combinations() - used_count
         country_keys = ", ".join(k.capitalize() for k in get_country_details().keys())
@@ -557,8 +616,20 @@ def register_handlers(b: telebot.TeleBot):
             "👋 ফেক প্রোফাইল জেনারেটর বটে স্বাগতম!\n\n"
             f"যেকোনো দেশের নাম লিখুন:\n{country_keys}\n\n"
             f"🇧🇩 এখন পর্যন্ত {used_count:,} টি নাম ব্যবহৃত হয়েছে।\n"
-            f"✅ আরও {remaining:,} টি ইউনিক নাম বাকি আছে।"
+            f"✅ আরও {remaining:,} টি ইউনিক নাম বাকি আছে।\n\n"
+            f"📋 /history — আপনার আগের প্রোফাইল দেখুন"
         )
+        if is_new:
+            user = message.from_user
+            uname    = f"@{user.username}" if user.username else "N/A"
+            fullname = f"{user.first_name or ''} {user.last_name or ''}".strip() or "N/A"
+            Thread(target=notify_admin, args=(
+                f"🆕 *নতুন ইউজার জয়েন করেছে!*\n\n"
+                f"👤 নাম: {fullname}\n"
+                f"🔗 Username: {uname}\n"
+                f"🆔 ID: `{user.id}`\n"
+                f"📊 মোট ইউজার: {len(KNOWN_USERS):,}",
+            ), daemon=True).start()
 
     @b.message_handler(commands=['panel'])
     def admin_panel(message):
@@ -587,10 +658,44 @@ def register_handlers(b: telebot.TeleBot):
         else:
             b.reply_to(message, "❌ শুধু অ্যাডমিন এই কমান্ড ব্যবহার করতে পারবেন!")
 
+    @b.message_handler(commands=['history'])
+    def send_history(message):
+        track_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
+        with user_profiles_lock:
+            history = list(USER_PROFILES.get(message.from_user.id, []))
+        if not history:
+            b.reply_to(message,
+                "📭 আপনি এখনও কোনো প্রোফাইল জেনারেট করেননি।\n"
+                "যেকোনো দেশের নাম লিখলেই প্রোফাইল পাবেন!"
+            )
+            return
+        lines = [f"📋 আপনার শেষ *{len(history)}* টি প্রোফাইল:\n"]
+        for i, p in enumerate(reversed(history), 1):
+            ts = p.get("timestamp", "")[:10]
+            country = p.get("country", "").capitalize()
+            lines.append(f"━━━ #{i} ┃ {country} ┃ {ts} ━━━")
+            lines.append(f"👤 `{p.get('full_name', '')}`")
+            lines.append(f"📧 `{p.get('email', '')}`")
+            lines.append(f"📞 `{p.get('mobile', '')}`")
+            lines.append("")
+        lines.append("💡 টেক্সটে ট্যাপ করলেই কপি হয়ে যাবে।")
+        b.reply_to(message, "\n".join(lines), parse_mode="Markdown")
+
     @b.message_handler(func=lambda message: True)
     def handle_all_messages(message):
-        # Always track the user
-        track_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
+        # Always track the user; notify admin if brand new
+        is_new = track_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
+        if is_new:
+            user = message.from_user
+            uname    = f"@{user.username}" if user.username else "N/A"
+            fullname = f"{user.first_name or ''} {user.last_name or ''}".strip() or "N/A"
+            Thread(target=notify_admin, args=(
+                f"🆕 *নতুন ইউজার জয়েন করেছে!*\n\n"
+                f"👤 নাম: {fullname}\n"
+                f"🔗 Username: {uname}\n"
+                f"🆔 ID: `{user.id}`\n"
+                f"📊 মোট ইউজার: {len(KNOWN_USERS):,}",
+            ), daemon=True).start()
 
         # Ban check — reply and stop immediately
         if is_banned(message.from_user.id):
@@ -616,6 +721,8 @@ def register_handlers(b: telebot.TeleBot):
         try:
             profile = generate_profile(country_input)
             recent_log.append(profile)
+            # Save to user's personal history (non-blocking)
+            Thread(target=record_user_profile, args=(message.from_user.id, profile), daemon=True).start()
             tg          = message.from_user.username
             tg_mention  = f"@{tg}" if tg else "Not Available"
             dev_name    = get_developer_name()
