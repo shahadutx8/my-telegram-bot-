@@ -985,6 +985,295 @@ def register_handlers(b: telebot.TeleBot):
 
         Thread(target=_do_ainame, daemon=True).start()
 
+    # ────────────────────────────────────────────
+    # Admin Bot Commands — Dashboard Control via Bot
+    # ────────────────────────────────────────────
+    def _admin_only(msg) -> bool:
+        """Returns True if sender is admin, otherwise replies and returns False."""
+        admin_id = get_admin_id()
+        if admin_id and msg.from_user.id == admin_id:
+            return True
+        b.reply_to(msg, "❌ এই কমান্ড শুধু অ্যাডমিন ব্যবহার করতে পারবেন!")
+        return False
+
+    @b.message_handler(commands=['admin', 'menu'])
+    def admin_menu(message):
+        if not _admin_only(message): return
+        b.reply_to(message,
+            "🔐 *অ্যাডমিন কন্ট্রোল প্যানেল*\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            "📊 *পরিসংখ্যান ও লগ*\n"
+            "• /stats — বট স্ট্যাটস\n"
+            "• /users — ইউজার লিস্ট\n"
+            "• /usage — নেম ইউজেজ লগ\n\n"
+            "🚫 *ব্যান ম্যানেজমেন্ট*\n"
+            "• /banned — ব্যানড লিস্ট\n"
+            "• /ban `<id>` [কারণ] — ব্যান করুন\n"
+            "• /unban `<id>` — ব্যান তুলুন\n\n"
+            "⚙️ *কনফিগ ও ফিল্ড*\n"
+            "• /config — বর্তমান কনফিগ\n"
+            "• /fields — প্রোফাইল ফিল্ড স্ট্যাটাস\n"
+            "• /setdev `<নাম>` — ডেভলপার নাম\n"
+            "• /setadminid `<id>` — অ্যাডমিন ID\n\n"
+            "🧪 *জেনারেট ও টেস্ট*\n"
+            "• /gen `<country>` — টেস্ট প্রোফাইল\n"
+            "• /reset — ব্যবহৃত নাম রিসেট\n\n"
+            "📢 *ব্রডকাস্ট*\n"
+            "• /broadcast `<টেক্সট>` — সবাইকে মেসেজ\n\n"
+            "🛑 *বট স্টপ*\n"
+            "• /stopbot — পোলিং বন্ধ করুন",
+            parse_mode="Markdown"
+        )
+
+    @b.message_handler(commands=['stats'])
+    def bot_stats(message):
+        if not _admin_only(message): return
+        total  = get_total_combinations()
+        used   = len(USED_NAMES)
+        remain = max(total - used, 0)
+        b.reply_to(message,
+            "📊 *বট স্ট্যাটস*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"🔤 মোট নাম সম্ভাবনা: `{total:,}`\n"
+            f"✅ ব্যবহৃত নাম: `{used:,}`\n"
+            f"🆕 বাকি নাম: `{remain:,}`\n\n"
+            f"👥 মোট ইউজার: `{len(KNOWN_USERS):,}`\n"
+            f"🚫 ব্যানড ইউজার: `{len(BANNED_USERS):,}`\n"
+            f"🌍 সাপোর্টেড দেশ: `{len(get_country_details())}`\n\n"
+            f"👤 ডেভলপার: {get_developer_name() or '_(সেট নেই)_'}\n"
+            f"🆔 Admin ID: `{get_admin_id() or '(সেট নেই)'}`",
+            parse_mode="Markdown"
+        )
+
+    @b.message_handler(commands=['users'])
+    def users_list(message):
+        if not _admin_only(message): return
+        parts    = message.text.strip().split()
+        page     = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 1
+        per_page = 10
+        all_u    = sorted(KNOWN_USERS.items(),
+                          key=lambda x: x[1].get("profile_count", 0), reverse=True)
+        total        = len(all_u)
+        total_pages  = max((total + per_page - 1) // per_page, 1)
+        page         = max(1, min(page, total_pages))
+        start        = (page - 1) * per_page
+        chunk        = all_u[start:start + per_page]
+        lines = [f"👥 *ইউজার লিস্ট* — পেজ {page}/{total_pages} (মোট {total:,})\n"]
+        for rank, (uid, info) in enumerate(chunk, start + 1):
+            uname = f"@{info['username']}" if info.get("username") else "—"
+            name  = info.get("first_name") or "—"
+            count = info.get("profile_count", 0)
+            lines.append(f"{rank}. {name} {uname}\n   🆔 `{uid}` | 📋 {count} profiles")
+        if page < total_pages:
+            lines.append(f"\n➡️ পরের পেজ: /users {page + 1}")
+        b.reply_to(message, "\n".join(lines), parse_mode="Markdown")
+
+    @b.message_handler(commands=['usage'])
+    def usage_list(message):
+        if not _admin_only(message): return
+        parts    = message.text.strip().split()
+        page     = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 1
+        per_page = 15
+        names    = sorted(USED_NAMES)
+        total    = len(names)
+        if not total:
+            b.reply_to(message, "ℹ️ এখনও কোনো নাম ব্যবহৃত হয়নি।")
+            return
+        total_pages = max((total + per_page - 1) // per_page, 1)
+        page        = max(1, min(page, total_pages))
+        start       = (page - 1) * per_page
+        chunk       = names[start:start + per_page]
+        lines = [f"📋 *ব্যবহৃত নাম লগ* — পেজ {page}/{total_pages} (মোট {total:,})\n"]
+        for i, name in enumerate(chunk, start + 1):
+            lines.append(f"{i}. `{name}`")
+        if page < total_pages:
+            lines.append(f"\n➡️ পরের পেজ: /usage {page + 1}")
+        b.reply_to(message, "\n".join(lines), parse_mode="Markdown")
+
+    @b.message_handler(commands=['banned'])
+    def banned_list_cmd(message):
+        if not _admin_only(message): return
+        if not BANNED_USERS:
+            b.reply_to(message, "✅ কোনো ব্যানড ইউজার নেই।")
+            return
+        lines = [f"🚫 *ব্যানড ইউজার* (মোট {len(BANNED_USERS)})\n"]
+        for uid, info in list(BANNED_USERS.items())[:20]:
+            uname  = f"@{info.get('username')}" if info.get("username") else "—"
+            reason = info.get("reason") or "—"
+            lines.append(f"• `{uid}` {uname}\n  কারণ: {reason}")
+        if len(BANNED_USERS) > 20:
+            lines.append(f"\n…আরও {len(BANNED_USERS) - 20} জন (ড্যাশবোর্ড দেখুন)")
+        b.reply_to(message, "\n".join(lines), parse_mode="Markdown")
+
+    @b.message_handler(commands=['ban'])
+    def ban_user_cmd(message):
+        if not _admin_only(message): return
+        parts = message.text.strip().split(maxsplit=2)
+        if len(parts) < 2 or not parts[1].lstrip('-').isdigit():
+            b.reply_to(message, "⚠️ ব্যবহার: /ban `<user_id>` [কারণ]", parse_mode="Markdown")
+            return
+        uid    = int(parts[1])
+        reason = parts[2].strip() if len(parts) > 2 else "অ্যাডমিন কর্তৃক ব্যান"
+        if uid in BANNED_USERS:
+            b.reply_to(message, f"ℹ️ ইউজার `{uid}` ইতিমধ্যে ব্যান আছে।", parse_mode="Markdown")
+            return
+        info = KNOWN_USERS.get(uid, {})
+        BANNED_USERS[uid] = {
+            "username":   info.get("username"),
+            "first_name": info.get("first_name"),
+            "reason":     reason,
+            "timestamp":  _dt.utcnow().isoformat(),
+        }
+        save_banned(BANNED_USERS)
+        b.reply_to(message,
+            f"✅ ইউজার `{uid}` ব্যান করা হয়েছে।\nকারণ: {reason}",
+            parse_mode="Markdown"
+        )
+
+    @b.message_handler(commands=['unban'])
+    def unban_user_cmd(message):
+        if not _admin_only(message): return
+        parts = message.text.strip().split()
+        if len(parts) < 2 or not parts[1].lstrip('-').isdigit():
+            b.reply_to(message, "⚠️ ব্যবহার: /unban `<user_id>`", parse_mode="Markdown")
+            return
+        uid = int(parts[1])
+        if uid not in BANNED_USERS:
+            b.reply_to(message, f"ℹ️ ইউজার `{uid}` ব্যানড নেই।", parse_mode="Markdown")
+            return
+        BANNED_USERS.pop(uid)
+        save_banned(BANNED_USERS)
+        b.reply_to(message, f"✅ ইউজার `{uid}` আনব্যান করা হয়েছে।", parse_mode="Markdown")
+
+    @b.message_handler(commands=['broadcast'])
+    def broadcast_cmd(message):
+        if not _admin_only(message): return
+        parts = message.text.strip().split(maxsplit=1)
+        if len(parts) < 2 or not parts[1].strip():
+            b.reply_to(message, "⚠️ ব্যবহার: /broadcast `<মেসেজ টেক্সট>`", parse_mode="Markdown")
+            return
+        text     = parts[1].strip()
+        user_ids = list(KNOWN_USERS.keys())
+        if not user_ids:
+            b.reply_to(message, "❌ কোনো ইউজার নেই।")
+            return
+        wait_msg = b.reply_to(message, f"📢 {len(user_ids):,} জনকে মেসেজ পাঠানো হচ্ছে…")
+        def _do_bc():
+            sent = failed = 0
+            for uid in user_ids:
+                try:
+                    b.send_message(uid, text)
+                    sent += 1
+                    _time_module.sleep(0.05)   # rate-limit
+                except Exception:
+                    failed += 1
+            try:
+                b.edit_message_text(
+                    f"✅ ব্রডকাস্ট সম্পন্ন!\n\n"
+                    f"📤 পাঠানো: {sent}\n"
+                    f"❌ ব্যর্থ: {failed}",
+                    message.chat.id, wait_msg.message_id
+                )
+            except Exception:
+                pass
+        Thread(target=_do_bc, daemon=True).start()
+
+    @b.message_handler(commands=['gen', 'generate'])
+    def gen_profile_cmd(message):
+        if not _admin_only(message): return
+        parts       = message.text.strip().split(maxsplit=1)
+        country_arg = parts[1].strip().lower() if len(parts) > 1 else "bangladesh"
+        country_details = get_country_details()
+        if country_arg not in country_details:
+            keys = ", ".join(k.capitalize() for k in country_details.keys())
+            b.reply_to(message, f"⚠️ অজানা দেশ। লিখুন: {keys}")
+            return
+        try:
+            profile     = generate_profile(country_arg)
+            enabled     = CONFIG.get("bot_reply_fields", FIELD_KEYS)
+            field_lines = ""
+            for key in FIELD_KEYS:
+                if key in enabled and key in profile:
+                    field_lines += f"{FIELD_EMOJI[key]} {FIELD_LABELS[key]}: `{profile[key]}`\n"
+            b.reply_to(message,
+                f"🧪 *টেস্ট প্রোফাইল* — {country_arg.capitalize()}\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"{field_lines}"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"_(লগ বা হিস্ট্রিতে সেভ হয়নি)_",
+                parse_mode="Markdown"
+            )
+        except Exception:
+            b.reply_to(message, "⚠️ প্রোফাইল তৈরি করা সম্ভব হয়নি।")
+
+    @b.message_handler(commands=['config'])
+    def show_config_cmd(message):
+        if not _admin_only(message): return
+        token = CONFIG.get("bot_token", "")
+        if len(token) > 12:
+            token_masked = f"{token[:8]}…{token[-4:]}"
+        elif token:
+            token_masked = token
+        else:
+            token_masked = "_(সেট নেই)_"
+        enabled_fields = CONFIG.get("bot_reply_fields", FIELD_KEYS)
+        sfx_sample     = ", ".join(CONFIG.get("nickname_sfx", [])[:5])
+        b.reply_to(message,
+            "⚙️ *বর্তমান কনফিগ*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"🤖 Token: `{token_masked}`\n"
+            f"🆔 Admin ID: `{get_admin_id() or '(সেট নেই)'}`\n"
+            f"👤 Developer: {get_developer_name() or '_(সেট নেই)_'}\n\n"
+            f"📋 এনাবল্ড ফিল্ড: {len(enabled_fields)}/{len(FIELD_KEYS)}\n"
+            f"🔤 মোট নাম সম্ভাবনা: `{get_total_combinations():,}`\n"
+            f"🏷️ Nickname suffix (প্রথম ৫): {sfx_sample}\n\n"
+            f"সম্পাদনা: /setdev, /setadminid বা ড্যাশবোর্ড",
+            parse_mode="Markdown"
+        )
+
+    @b.message_handler(commands=['fields'])
+    def show_fields_cmd(message):
+        if not _admin_only(message): return
+        enabled = set(CONFIG.get("bot_reply_fields", FIELD_KEYS))
+        lines   = ["📋 *প্রোফাইল ফিল্ড স্ট্যাটাস*\n"]
+        for key in FIELD_KEYS:
+            icon  = "✅" if key in enabled else "❌"
+            label = FIELD_LABELS.get(key, key)
+            emoji = FIELD_EMOJI.get(key, "")
+            lines.append(f"{icon} {emoji} {label} (`{key}`)")
+        lines.append("\n_ফিল্ড চালু/বন্ধ করতে ড্যাশবোর্ডের Settings ট্যাব ব্যবহার করুন।_")
+        b.reply_to(message, "\n".join(lines), parse_mode="Markdown")
+
+    @b.message_handler(commands=['setdev'])
+    def set_developer_cmd(message):
+        if not _admin_only(message): return
+        parts = message.text.strip().split(maxsplit=1)
+        name  = parts[1].strip() if len(parts) > 1 else ""
+        CONFIG["developer_name"] = name
+        save_config(CONFIG)
+        if name:
+            b.reply_to(message, f"✅ ডেভলপার নাম সেট হয়েছে: *{name}*", parse_mode="Markdown")
+        else:
+            b.reply_to(message, "✅ ডেভলপার নাম সরিয়ে দেওয়া হয়েছে।")
+
+    @b.message_handler(commands=['setadminid'])
+    def set_admin_id_cmd(message):
+        if not _admin_only(message): return
+        parts = message.text.strip().split()
+        if len(parts) < 2 or not parts[1].lstrip('-').isdigit():
+            b.reply_to(message, "⚠️ ব্যবহার: /setadminid `<telegram_id>`", parse_mode="Markdown")
+            return
+        new_id = int(parts[1])
+        CONFIG["admin_id"] = new_id
+        save_config(CONFIG)
+        b.reply_to(message, f"✅ Admin ID সেট হয়েছে: `{new_id}`", parse_mode="Markdown")
+
+    @b.message_handler(commands=['stopbot'])
+    def stop_bot_cmd(message):
+        if not _admin_only(message): return
+        b.reply_to(message, "🛑 বট পোলিং বন্ধ করা হচ্ছে…")
+        Thread(target=lambda: b.stop_polling(), daemon=True).start()
+
     @b.message_handler(func=lambda message: True)
     def handle_all_messages(message):
         is_new = track_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
