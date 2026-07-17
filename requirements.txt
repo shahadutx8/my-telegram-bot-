@@ -7,3 +7,5 @@ Flask
 psycopg2-binary
 pyTelegramBotAPI
 werkzeug
+google-generativeai
+google-genai
