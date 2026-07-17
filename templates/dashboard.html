@@ -281,6 +281,7 @@
     <button class="tab-btn" onclick="switchTab('schedule',this)">📅 Schedule</button>
     <button class="tab-btn" onclick="switchTab('sendmedia',this)">📨 Send</button>
     <button class="tab-btn" onclick="switchTab('log',this)">📜 Log</button>
+    <button class="tab-btn" onclick="switchTab('texts',this)">✏️ Texts</button>
     <button class="tab-btn" onclick="switchTab('settings',this)">⚙️ Settings</button>
   </div>
   <a href="/logout" class="logout-btn">Logout</a>
@@ -840,6 +841,22 @@
     </div>
   </div>
 
+  <!-- ══ TEXTS TAB ══ -->
+  <div id="tab-texts" class="page">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:10px;">
+      <div>
+        <h2 style="font-size:16px;font-weight:700;margin:0;">✏️ Bot Message Texts</h2>
+        <p style="font-size:12px;color:#aaa;margin:5px 0 0;">বটের সব টেক্সট এখানে এডিট করুন। Placeholder গুলো <code style="background:rgba(255,255,255,0.07);padding:1px 5px;border-radius:3px;color:#c4b5fd;">{variable}</code> এভাবে লিখুন।</p>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn btn-purple" onclick="saveAllBotTexts()">💾 Save All</button>
+        <button class="btn" style="background:rgba(255,255,255,0.06);color:#aaa;" onclick="resetAllBotTexts()">↩ Reset All to Default</button>
+      </div>
+    </div>
+    <div class="form-msg" id="texts-global-msg" style="margin-bottom:14px;"></div>
+    <div id="texts-container"><span style="color:#666;font-size:13px;">লোড হচ্ছে…</span></div>
+  </div>
+
   <!-- ══ SETTINGS TAB ══ -->
   <div id="tab-settings" class="page">
     <div class="settings-grid">
@@ -1332,6 +1349,7 @@ function switchTab(name, btn) {
   if (name === 'banned')    loadBanned();
   if (name === 'countries') loadCountries();
   if (name === 'settings')  { loadBotConfigForm(); loadFieldsConfig(); loadAiPrompts(); }
+  if (name === 'texts')     loadBotTexts();
   if (name === 'generate')  loadCountrySelect();
   if (name === 'users')     loadUsers();
   if (name === 'broadcast') loadBroadcastUserCount();
@@ -2025,6 +2043,116 @@ function renderSendHistory() {
         <div style="font-size:12px;color:#666;">✅ ${h.sent} সফল ${h.failed ? `❌ ${h.failed} ব্যর্থ` : ''} · ${h.time}</div>
       </div>
     </div>`).join('');
+}
+
+// ── Bot Texts (✏️ Texts tab) ──
+const BOT_TEXT_META = [
+  { key:"welcome",            cat:"🎉 Welcome & Start",      label:"/start — স্বাগত বার্তা",              hint:"{country_keys}, {used_count}, {remaining}" },
+  { key:"profile_reply",      cat:"📋 Profile Reply",        label:"Profile reply template",              hint:"{dev_line}, {tg_mention}, {country}, {field_lines}" },
+  { key:"unknown_country",    cat:"📋 Profile Reply",        label:"অজানা দেশের নাম লিখলে",              hint:"{keys}" },
+  { key:"profile_failed",     cat:"📋 Profile Reply",        label:"Profile তৈরিতে error হলে",            hint:"" },
+  { key:"ai_reply",           cat:"🤖 AI Name (/ainame)",    label:"AI name reply template",              hint:"{dev_line}, {ai_badge}, {tg_mention}, {country}, {field_lines}" },
+  { key:"ai_generating",      cat:"🤖 AI Name (/ainame)",    label:"AI নাম তৈরির loading message",        hint:"" },
+  { key:"ai_unavailable",     cat:"🤖 AI Name (/ainame)",    label:"AI key না থাকলে reply",               hint:"" },
+  { key:"ai_unknown_country", cat:"🤖 AI Name (/ainame)",    label:"AI — অজানা দেশ",                     hint:"{keys}" },
+  { key:"ai_profile_failed",  cat:"🤖 AI Name (/ainame)",    label:"AI profile তৈরিতে error",             hint:"" },
+  { key:"history_empty",      cat:"📜 History",              label:"/history — কোনো profile না থাকলে",    hint:"" },
+  { key:"history_copy_hint",  cat:"📜 History",              label:"/history — copy hint লাইন",           hint:"" },
+  { key:"panel_reply",        cat:"⚙️ Admin Commands",       label:"/panel — admin reply",                hint:"{developer_name}, {total_combinations}, {used_count}, {remaining}" },
+  { key:"panel_not_admin",    cat:"⚙️ Admin Commands",       label:"/panel — admin নন হলে reply",        hint:"" },
+  { key:"reset_success",      cat:"⚙️ Admin Commands",       label:"/reset — সফল হলে reply",              hint:"" },
+  { key:"reset_not_admin",    cat:"⚙️ Admin Commands",       label:"/reset — admin নন হলে reply",        hint:"" },
+  { key:"banned_reply",       cat:"🚫 Ban & Security",       label:"ব্যান করা user-কে reply",             hint:"" },
+  { key:"new_user_notify",    cat:"🔔 Admin Notifications",  label:"নতুন user join notification (admin)", hint:"{fullname}, {uname}, {user_id}, {total_users}" },
+  { key:"bot_crash_notify",   cat:"🔔 Admin Notifications",  label:"বট crash হলে admin notification",     hint:"{error}" },
+];
+
+let _botTextsCache = {};
+
+async function loadBotTexts() {
+  try {
+    const res = await fetch('/api/bot-texts');
+    if (!res.ok) { toast('Texts লোড ব্যর্থ', true); return; }
+    const data = await res.json();
+    _botTextsCache = data.texts || {};
+    renderBotTexts(_botTextsCache);
+  } catch(e) { toast('Network error', true); }
+}
+
+function renderBotTexts(texts) {
+  const container = document.getElementById('texts-container');
+  if (!container) return;
+  // Group by category
+  const cats = {};
+  BOT_TEXT_META.forEach(m => { if (!cats[m.cat]) cats[m.cat] = []; cats[m.cat].push(m); });
+  container.innerHTML = Object.entries(cats).map(([cat, items]) => `
+    <div class="section" style="margin-bottom:20px;padding:18px 22px;">
+      <h2 style="font-size:14px;font-weight:700;margin-bottom:14px;">${escHtml(cat)}</h2>
+      <div style="display:flex;flex-direction:column;gap:14px;">
+        ${items.map(m => {
+          const rows = Math.min(Math.max((texts[m.key]||'').split('\n').length + 1, 3), 10);
+          return `<div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:10px;padding:12px 14px;">
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:8px;gap:8px;flex-wrap:wrap;">
+              <div>
+                <div style="font-size:13px;font-weight:600;color:#e0d7ff;">${escHtml(m.label)}</div>
+                ${m.hint ? `<div style="font-size:11px;color:#666;margin-top:2px;">Placeholders: <span style="color:#a78bfa;">${escHtml(m.hint)}</span></div>` : ''}
+              </div>
+              <div style="display:flex;gap:6px;flex-shrink:0;">
+                <button class="btn" style="font-size:11px;padding:3px 10px;background:rgba(124,99,245,0.18);color:#c4b5fd;" onclick="saveSingleBotText('${m.key}')">💾 Save</button>
+                <button class="btn" style="font-size:11px;padding:3px 10px;background:rgba(255,255,255,0.05);color:#777;" onclick="resetSingleBotText('${m.key}')">↩</button>
+              </div>
+            </div>
+            <textarea id="txt-${m.key}" rows="${rows}"
+              style="width:100%;background:#0c0c18;border:1px solid rgba(255,255,255,0.08);border-radius:7px;color:#e0d7ff;font-size:12px;padding:8px 10px;resize:vertical;font-family:monospace;line-height:1.65;box-sizing:border-box;"
+            >${escHtml(texts[m.key] || '')}</textarea>
+            <div class="form-msg" id="txt-msg-${m.key}" style="margin-top:5px;font-size:12px;display:none;"></div>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>`).join('');
+}
+
+async function saveSingleBotText(key) {
+  const el = document.getElementById('txt-' + key);
+  if (!el) return;
+  const data = await apiPost('/api/bot-texts', { texts: { [key]: el.value } });
+  if (!data) return;
+  const msg = document.getElementById('txt-msg-' + key);
+  if (msg) {
+    msg.textContent = data.success ? '✅ সেভ হয়েছে!' : (data.error || 'Error');
+    msg.className = 'form-msg ' + (data.success ? 'success' : 'error');
+    msg.style.display = 'block';
+    setTimeout(() => { msg.style.display = 'none'; }, 3000);
+  }
+  if (data.success) { _botTextsCache[key] = el.value; toast('Saved ✓'); }
+}
+
+async function saveAllBotTexts() {
+  const texts = {};
+  BOT_TEXT_META.forEach(m => { const el = document.getElementById('txt-' + m.key); if (el) texts[m.key] = el.value; });
+  const data = await apiPost('/api/bot-texts', { texts });
+  if (!data) return;
+  showMsg('texts-global-msg', data.message || data.error, !data.success);
+  if (data.success) { toast('সব text সেভ হয়েছে ✓'); Object.assign(_botTextsCache, texts); }
+}
+
+async function resetSingleBotText(key) {
+  if (!confirm(`"${key}" ডিফল্টে ফিরিয়ে দেবেন?`)) return;
+  const data = await apiPost('/api/bot-texts/reset', { key });
+  if (!data) return;
+  if (data.success && data.default_value !== undefined) {
+    const el = document.getElementById('txt-' + key); if (el) el.value = data.default_value;
+    _botTextsCache[key] = data.default_value;
+    toast('✅ ডিফল্টে ফিরে গেছে!');
+  } else { toast(data.error || 'Error', true); }
+}
+
+async function resetAllBotTexts() {
+  if (!confirm('সব text ডিফল্টে ফিরিয়ে দেবেন?')) return;
+  const data = await apiPost('/api/bot-texts/reset', { key: 'all' });
+  if (!data) return;
+  if (data.success) { _botTextsCache = data.texts || {}; renderBotTexts(_botTextsCache); toast('✅ সব text ডিফল্টে ফিরে গেছে!'); }
+  else { toast(data.error || 'Error', true); }
 }
 
 // ── Init on page load ──

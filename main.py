@@ -187,6 +187,92 @@ DEFAULT_AI_PROMPT_INTL = (
     "Return only the name — no explanation, no extra text."
 )
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Default Bot Text Templates (all dashboard-editable)
+# Placeholders use Python str.format() syntax: {variable_name}
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+DEFAULT_BOT_TEXTS = {
+    # /start
+    "welcome": (
+        "👋 ফেক প্রোফাইল জেনারেটর বটে স্বাগতম!\n\n"
+        "যেকোনো দেশের নাম লিখুন:\n{country_keys}\n\n"
+        "🇧🇩 এখন পর্যন্ত {used_count} টি নাম ব্যবহৃত হয়েছে।\n"
+        "✅ আরও {remaining} টি ইউনিক নাম বাকি আছে।\n\n"
+        "📋 /history — আগের প্রোফাইল দেখুন\n"
+        "🤖 /ainame [দেশ] — AI দিয়ে real-style নাম তৈরি করুন"
+    ),
+    # admin notification — new user joined
+    "new_user_notify": (
+        "🆕 *নতুন ইউজার জয়েন করেছে!*\n\n"
+        "👤 নাম: {fullname}\n"
+        "🔗 Username: {uname}\n"
+        "🆔 ID: `{user_id}`\n"
+        "📊 মোট ইউজার: {total_users}"
+    ),
+    # /panel (admin)
+    "panel_reply": (
+        "⚙️ কন্ট্রোল প্যানেল:\n\n"
+        "বট চালু আছে ✅\n"
+        "ডেভলপার: {developer_name}\n"
+        "মোট সম্ভাব্য নাম: {total_combinations}\n"
+        "ব্যবহৃত নাম: {used_count}\n"
+        "বাকি নাম: {remaining}"
+    ),
+    "panel_not_admin":    "❌ আপনি এই বটের অ্যাডমিন নন!",
+    # /reset (admin)
+    "reset_success":      "✅ সমস্ত ব্যবহৃত নাম রিসেট করা হয়েছে!",
+    "reset_not_admin":    "❌ শুধু অ্যাডমিন এই কমান্ড ব্যবহার করতে পারবেন!",
+    # /history
+    "history_empty": (
+        "📭 আপনি এখনও কোনো প্রোফাইল জেনারেট করেননি।\n"
+        "যেকোনো দেশের নাম লিখলেই প্রোফাইল পাবেন!"
+    ),
+    "history_copy_hint":  "💡 টেক্সটে ট্যাপ করলেই কপি হয়ে যাবে।",
+    # ban reply
+    "banned_reply": (
+        "🚫 আপনাকে এই বট থেকে ব্যান করা হয়েছে।\n"
+        "আপনি আর এই বট ব্যবহার করতে পারবেন না।"
+    ),
+    # /ainame
+    "ai_unavailable":     "⚠️ AI name generator এখন উপলব্ধ নেই।",
+    "ai_unknown_country": "⚠️ অজানা দেশ।\nলিখুন: {keys}",
+    "ai_generating":      "🤖 AI দিয়ে নাম তৈরি হচ্ছে, একটু অপেক্ষা করুন…",
+    "ai_profile_failed":  "⚠️ প্রোফাইল তৈরি করা সম্ভব হয়নি।",
+    # AI reply template — placeholders: dev_line, ai_badge, tg_mention, country, field_lines
+    "ai_reply": (
+        "{dev_line}"
+        "{ai_badge}\n"
+        "🆔 Your Telegram: {tg_mention}\n"
+        "🌍 দেশ: {country}\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "{field_lines}"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "💡 টেক্সটে ট্যাপ করলেই অটো-কপি হয়ে যাবে।"
+    ),
+    # regular profile reply
+    "unknown_country": (
+        "⚠️ দুঃখিত, এটি কোনো সঠিক দেশের নাম নয়।\n\n"
+        "লিখুন: {keys}"
+    ),
+    # profile reply template — placeholders: dev_line, tg_mention, country, field_lines
+    "profile_reply": (
+        "{dev_line}"
+        "🆔 Your Telegram: {tg_mention}\n"
+        "🌍 দেশ: {country}\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "{field_lines}"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "💡 তথ্যের ওপর ট্যাপ করলেই অটো-কপি হয়ে যাবে।"
+    ),
+    "profile_failed":     "⚠️ দুঃখিত, প্রোফাইল ডাটা জেনারেট করা সম্ভব হয়নি।",
+    # admin notification — bot crashed
+    "bot_crash_notify": (
+        "⚠️ বট unexpected ভাবে বন্ধ হয়ে গেছে!\n\n"
+        "🔴 Error: {error}\n\n"
+        "Dashboard থেকে বট রিস্টার্ট করুন।"
+    ),
+}
+
 def load_config():
     defaults = {
         "bot_token": "", "password_hash": "",
@@ -198,6 +284,7 @@ def load_config():
         "developer_name": os.environ.get("DEVELOPER_NAME", ""),
         "ai_prompt_bd":   DEFAULT_AI_PROMPT_BD,
         "ai_prompt_intl": DEFAULT_AI_PROMPT_INTL,
+        "bot_texts":      {k: v for k, v in DEFAULT_BOT_TEXTS.items()},
         "nickname_sfx": ["07", "Official", "Gamer", "Pro", "Boss", "Real", "King", "BD", "X", ""],
         "countries": {
             "bangladesh": {"locale": "en_US", "code": "+880", "digits": ["13XXXXXXXX", "14XXXXXXXX", "15XXXXXXXX", "16XXXXXXXX", "19XXXXXXXX"], "is_bd": True},
@@ -213,12 +300,29 @@ def load_config():
     }
     db_data = db_get("config")
     if db_data:
+        saved_texts = db_data.pop("bot_texts", {})
         defaults.update(db_data)
+        if saved_texts:
+            defaults["bot_texts"].update(saved_texts)  # deep merge — new keys keep defaults
     return defaults
 
 def save_config(cfg: dict):
     with config_lock:
         db_set("config", cfg)
+
+def get_text(key: str, **kwargs) -> str:
+    """Fetch a bot message template from CONFIG (dashboard-editable) and format it.
+    Falls back to DEFAULT_BOT_TEXTS if the key is missing from config.
+    Format errors are silently caught — the raw template is returned.
+    """
+    texts = CONFIG.get("bot_texts", {})
+    template = texts.get(key) or DEFAULT_BOT_TEXTS.get(key, key)
+    if not kwargs:
+        return template
+    try:
+        return template.format(**kwargs)
+    except (KeyError, ValueError, IndexError):
+        return template
 
 CONFIG = load_config()
 
@@ -370,9 +474,7 @@ def start_bot_polling(b):
             try:
                 b.send_message(
                     admin_id,
-                    f"⚠️ বট unexpected ভাবে বন্ধ হয়ে গেছে!\n\n"
-                    f"🔴 Error: {str(e)[:300]}\n\n"
-                    f"Dashboard থেকে বট রিস্টার্ট করুন।"
+                    get_text("bot_crash_notify", error=str(e)[:300])
                 )
             except Exception:
                 pass
@@ -747,24 +849,19 @@ def register_handlers(b: telebot.TeleBot):
         used_count   = len(USED_NAMES)
         remaining    = get_total_combinations() - used_count
         country_keys = ", ".join(k.capitalize() for k in get_country_details().keys())
-        b.reply_to(message,
-            "👋 ফেক প্রোফাইল জেনারেটর বটে স্বাগতম!\n\n"
-            f"যেকোনো দেশের নাম লিখুন:\n{country_keys}\n\n"
-            f"🇧🇩 এখন পর্যন্ত {used_count:,} টি নাম ব্যবহৃত হয়েছে।\n"
-            f"✅ আরও {remaining:,} টি ইউনিক নাম বাকি আছে।\n\n"
-            f"📋 /history — আগের প্রোফাইল দেখুন\n"
-            f"🤖 /ainame [দেশ] — AI দিয়ে real-style নাম তৈরি করুন"
-        )
+        b.reply_to(message, get_text("welcome",
+            country_keys=country_keys,
+            used_count=f"{used_count:,}",
+            remaining=f"{remaining:,}",
+        ))
         if is_new:
             user = message.from_user
             uname    = f"@{user.username}" if user.username else "N/A"
             fullname = f"{user.first_name or ''} {user.last_name or ''}".strip() or "N/A"
             Thread(target=notify_admin, args=(
-                f"🆕 *নতুন ইউজার জয়েন করেছে!*\n\n"
-                f"👤 নাম: {fullname}\n"
-                f"🔗 Username: {uname}\n"
-                f"🆔 ID: `{user.id}`\n"
-                f"📊 মোট ইউজার: {len(KNOWN_USERS):,}",
+                get_text("new_user_notify",
+                    fullname=fullname, uname=uname,
+                    user_id=user.id, total_users=f"{len(KNOWN_USERS):,}"),
             ), daemon=True).start()
 
     @b.message_handler(commands=['panel'])
@@ -772,16 +869,14 @@ def register_handlers(b: telebot.TeleBot):
         admin_id = get_admin_id()
         if admin_id and message.from_user.id == admin_id:
             total = get_total_combinations()
-            b.reply_to(message,
-                f"⚙️ কন্ট্রোল প্যানেল:\n\n"
-                f"বট চালু আছে ✅\n"
-                f"ডেভলপার: {get_developer_name()}\n"
-                f"মোট সম্ভাব্য নাম: {total:,}\n"
-                f"ব্যবহৃত নাম: {len(USED_NAMES):,}\n"
-                f"বাকি নাম: {total - len(USED_NAMES):,}"
-            )
+            b.reply_to(message, get_text("panel_reply",
+                developer_name=get_developer_name(),
+                total_combinations=f"{total:,}",
+                used_count=f"{len(USED_NAMES):,}",
+                remaining=f"{total - len(USED_NAMES):,}",
+            ))
         else:
-            b.reply_to(message, "❌ আপনি এই বটের অ্যাডমিন নন!")
+            b.reply_to(message, get_text("panel_not_admin"))
 
     @b.message_handler(commands=['reset'])
     def reset_names(message):
@@ -790,9 +885,9 @@ def register_handlers(b: telebot.TeleBot):
             global USED_NAMES
             USED_NAMES = set()
             save_used_names(USED_NAMES)
-            b.reply_to(message, "✅ সমস্ত ব্যবহৃত নাম রিসেট করা হয়েছে!")
+            b.reply_to(message, get_text("reset_success"))
         else:
-            b.reply_to(message, "❌ শুধু অ্যাডমিন এই কমান্ড ব্যবহার করতে পারবেন!")
+            b.reply_to(message, get_text("reset_not_admin"))
 
     @b.message_handler(commands=['history'])
     def send_history(message):
@@ -800,10 +895,7 @@ def register_handlers(b: telebot.TeleBot):
         with user_profiles_lock:
             history = list(USER_PROFILES.get(message.from_user.id, []))
         if not history:
-            b.reply_to(message,
-                "📭 আপনি এখনও কোনো প্রোফাইল জেনারেট করেননি।\n"
-                "যেকোনো দেশের নাম লিখলেই প্রোফাইল পাবেন!"
-            )
+            b.reply_to(message, get_text("history_empty"))
             return
         lines = [f"📋 আপনার শেষ *{len(history)}* টি প্রোফাইল:\n"]
         for i, p in enumerate(reversed(history), 1):
@@ -814,7 +906,7 @@ def register_handlers(b: telebot.TeleBot):
             lines.append(f"📧 `{p.get('email', '')}`")
             lines.append(f"📞 `{p.get('mobile', '')}`")
             lines.append("")
-        lines.append("💡 টেক্সটে ট্যাপ করলেই কপি হয়ে যাবে।")
+        lines.append(get_text("history_copy_hint"))
         b.reply_to(message, "\n".join(lines), parse_mode="Markdown")
 
     @b.message_handler(commands=['ainame'])
@@ -822,11 +914,11 @@ def register_handlers(b: telebot.TeleBot):
         track_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
 
         if is_banned(message.from_user.id):
-            b.reply_to(message, "🚫 আপনাকে এই বট থেকে ব্যান করা হয়েছে।")
+            b.reply_to(message, get_text("banned_reply"))
             return
 
         if not _GEMINI_KEY:
-            b.reply_to(message, "⚠️ AI name generator এখন উপলব্ধ নেই।")
+            b.reply_to(message, get_text("ai_unavailable"))
             return
 
         parts       = message.text.strip().split(maxsplit=1)
@@ -835,10 +927,10 @@ def register_handlers(b: telebot.TeleBot):
         country_details = get_country_details()
         if country_arg not in country_details:
             keys = ", ".join(k.capitalize() for k in country_details.keys())
-            b.reply_to(message, f"⚠️ অজানা দেশ।\nলিখুন: {keys}")
+            b.reply_to(message, get_text("ai_unknown_country", keys=keys))
             return
 
-        wait_msg = b.reply_to(message, "🤖 AI দিয়ে নাম তৈরি হচ্ছে, একটু অপেক্ষা করুন…")
+        wait_msg = b.reply_to(message, get_text("ai_generating"))
 
         def _do_ainame():
             ai_name = generate_ai_name(country_arg)
@@ -850,11 +942,10 @@ def register_handlers(b: telebot.TeleBot):
                     b.delete_message(message.chat.id, wait_msg.message_id)
                 except Exception:
                     pass
-                b.reply_to(message, "⚠️ প্রোফাইল তৈরি করা সম্ভব হয়নি।")
+                b.reply_to(message, get_text("ai_profile_failed"))
                 return
 
             if ai_name:
-                # Overwrite name fields with AI-generated name
                 profile["full_name"]   = ai_name
                 profile["facebook_id"] = ai_name
                 clean = re.sub(r'[^a-zA-Z0-9]', '', ai_name).lower()
@@ -864,7 +955,6 @@ def register_handlers(b: telebot.TeleBot):
                     profile["email"]    = f"{clean}{rnum}@gmail.com"
                     profile["google"]   = profile["email"]
 
-            # Record in personal history
             Thread(target=record_user_profile, args=(message.from_user.id, profile), daemon=True).start()
 
             enabled = _get_enabled_fields()
@@ -885,14 +975,11 @@ def register_handlers(b: telebot.TeleBot):
                 pass
 
             b.reply_to(message,
-                f"{dev_line}"
-                f"{ai_badge}\n"
-                f"🆔 Your Telegram: {tg_mention}\n"
-                f"🌍 দেশ: {country_arg.capitalize()}\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"{field_lines}"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"💡 টেক্সটে ট্যাপ করলেই অটো-কপি হয়ে যাবে।",
+                get_text("ai_reply",
+                    dev_line=dev_line, ai_badge=ai_badge,
+                    tg_mention=tg_mention, country=country_arg.capitalize(),
+                    field_lines=field_lines,
+                ),
                 parse_mode="Markdown"
             )
 
@@ -900,29 +987,21 @@ def register_handlers(b: telebot.TeleBot):
 
     @b.message_handler(func=lambda message: True)
     def handle_all_messages(message):
-        # Always track the user; notify admin if brand new
         is_new = track_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
         if is_new:
             user = message.from_user
             uname    = f"@{user.username}" if user.username else "N/A"
             fullname = f"{user.first_name or ''} {user.last_name or ''}".strip() or "N/A"
             Thread(target=notify_admin, args=(
-                f"🆕 *নতুন ইউজার জয়েন করেছে!*\n\n"
-                f"👤 নাম: {fullname}\n"
-                f"🔗 Username: {uname}\n"
-                f"🆔 ID: `{user.id}`\n"
-                f"📊 মোট ইউজার: {len(KNOWN_USERS):,}",
+                get_text("new_user_notify",
+                    fullname=fullname, uname=uname,
+                    user_id=user.id, total_users=f"{len(KNOWN_USERS):,}"),
             ), daemon=True).start()
 
-        # Ban check — reply and stop immediately
         if is_banned(message.from_user.id):
-            b.reply_to(message,
-                "🚫 আপনাকে এই বট থেকে ব্যান করা হয়েছে।\n"
-                "আপনি আর এই বট ব্যবহার করতে পারবেন না।"
-            )
+            b.reply_to(message, get_text("banned_reply"))
             return
 
-        # Ignore non-text updates (stickers, photos, voice, etc.)
         if not message.text:
             return
 
@@ -930,20 +1009,15 @@ def register_handlers(b: telebot.TeleBot):
         country_details = get_country_details()
         if country_input not in country_details:
             keys = ", ".join(k.capitalize() for k in country_details.keys())
-            b.reply_to(message,
-                f"⚠️ দুঃখিত, এটি কোনো সঠিক দেশের নাম নয়।\n\n"
-                f"লিখুন: {keys}"
-            )
+            b.reply_to(message, get_text("unknown_country", keys=keys))
             return
         try:
             profile = generate_profile(country_input)
             recent_log.append(profile)
-            # Save to user's personal history (non-blocking)
             Thread(target=record_user_profile, args=(message.from_user.id, profile), daemon=True).start()
             tg          = message.from_user.username
             tg_mention  = f"@{tg}" if tg else "Not Available"
             dev_name    = get_developer_name()
-            # Track who received this BD name
             if country_details[country_input].get('is_bd'):
                 log_name_usage(
                     bd_name    = profile['full_name'],
@@ -951,14 +1025,12 @@ def register_handlers(b: telebot.TeleBot):
                     username   = message.from_user.username,
                     first_name = message.from_user.first_name,
                 )
-            # Update profile count for this user
             track_user(
                 message.from_user.id,
                 message.from_user.username,
                 message.from_user.first_name,
                 increment_count=True,
             )
-            # Build reply using only enabled fields
             enabled = _get_enabled_fields()
             field_lines = ""
             for key in FIELD_KEYS:
@@ -968,17 +1040,14 @@ def register_handlers(b: telebot.TeleBot):
                     field_lines += f"{emoji} {label}: `{profile[key]}`\n"
             dev_line = f"👤 Developer: {dev_name}\n" if dev_name else ""
             b.reply_to(message,
-                f"{dev_line}"
-                f"🆔 Your Telegram: {tg_mention}\n"
-                f"🌍 দেশ: {country_input.capitalize()}\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"{field_lines}"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"💡 তথ্যের ওপর ট্যাপ করলেই অটো-কপি হয়ে যাবে।",
+                get_text("profile_reply",
+                    dev_line=dev_line, tg_mention=tg_mention,
+                    country=country_input.capitalize(), field_lines=field_lines,
+                ),
                 parse_mode="Markdown"
             )
         except Exception:
-            b.reply_to(message, "⚠️ দুঃখিত, প্রোফাইল ডাটা জেনারেট করা সম্ভব হয়নি।")
+            b.reply_to(message, get_text("profile_failed"))
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Flask Routes — Auth
@@ -1448,6 +1517,52 @@ def api_ai_prompts_set():
     if changed:
         save_config(CONFIG)
     return jsonify(success=True, message='✅ AI Prompt সেভ হয়েছে!')
+
+@app.route('/api/bot-texts', methods=['GET'])
+@login_required
+def api_bot_texts_get():
+    current = CONFIG.get("bot_texts", {})
+    merged  = {k: current.get(k, v) for k, v in DEFAULT_BOT_TEXTS.items()}
+    return jsonify(texts=merged, defaults={k: v for k, v in DEFAULT_BOT_TEXTS.items()})
+
+@app.route('/api/bot-texts', methods=['POST'])
+@login_required
+def api_bot_texts_set():
+    data        = request.get_json(force=True)
+    texts_input = data.get("texts", {})
+    if not isinstance(texts_input, dict):
+        return jsonify(success=False, error="texts must be a dict.")
+    bot_texts = CONFIG.get("bot_texts", {k: v for k, v in DEFAULT_BOT_TEXTS.items()})
+    updated = 0
+    for key, val in texts_input.items():
+        if key not in DEFAULT_BOT_TEXTS:
+            continue
+        val = str(val).strip()
+        if not val:
+            return jsonify(success=False, error=f'"{key}" খালি রাখা যাবে না।')
+        bot_texts[key] = val
+        updated += 1
+    CONFIG["bot_texts"] = bot_texts
+    save_config(CONFIG)
+    return jsonify(success=True, message=f'✅ {updated} টি text সেভ হয়েছে!')
+
+@app.route('/api/bot-texts/reset', methods=['POST'])
+@login_required
+def api_bot_texts_reset():
+    data = request.get_json(force=True)
+    key  = data.get("key", "all")
+    bot_texts = CONFIG.get("bot_texts", {k: v for k, v in DEFAULT_BOT_TEXTS.items()})
+    if key == "all":
+        CONFIG["bot_texts"] = {k: v for k, v in DEFAULT_BOT_TEXTS.items()}
+        save_config(CONFIG)
+        return jsonify(success=True, texts=CONFIG["bot_texts"], message="✅ সব text ডিফল্টে ফিরে গেছে!")
+    if key not in DEFAULT_BOT_TEXTS:
+        return jsonify(success=False, error="Unknown text key.")
+    bot_texts[key] = DEFAULT_BOT_TEXTS[key]
+    CONFIG["bot_texts"] = bot_texts
+    save_config(CONFIG)
+    return jsonify(success=True, default_value=DEFAULT_BOT_TEXTS[key],
+                   message=f'✅ "{key}" ডিফল্টে ফিরে গেছে!')
 
 @app.route('/api/ai-prompts/reset', methods=['POST'])
 @login_required
