@@ -9,3 +9,11 @@ pyTelegramBotAPI
 werkzeug
 google-generativeai
 google-genai
+Faker
+Flask
+google-genai
+google-generativeai
+psycopg2-binary
+pyTelegramBotAPI
+sift-stack-py
+werkzeug
