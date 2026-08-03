@@ -799,17 +799,19 @@ def generate_profile(country_key):
     facebook_id = full_name
 
     # ── 3. Unique username (→ email) ─────────────────────────────
+    # Base truncated to 12 chars + 4-digit suffix → total 5–16 chars (4–16 limit)
+    _uname_base = (clean_name[:12] or "user")
     with used_usernames_lock:
         for _ in range(10_000):
-            rnum     = random.randint(100_000, 999_999)   # 6-digit suffix
-            username = f"{clean_name}{rnum}"
+            rnum     = random.randint(1000, 9999)   # 4-digit suffix
+            username = f"{_uname_base}{rnum}"
             if username not in USED_USERNAMES:
                 USED_USERNAMES.add(username)
                 save_used_usernames(USED_USERNAMES)
                 break
         else:
-            rnum     = random.randint(100_000, 999_999)
-            username = f"{clean_name}{rnum}"
+            rnum     = random.randint(1000, 9999)
+            username = f"{_uname_base}{rnum}"
 
     email = f"{username}@gmail.com"
 
@@ -951,7 +953,7 @@ def register_handlers(b: telebot.TeleBot):
                 clean = re.sub(r'[^a-zA-Z0-9]', '', ai_name).lower()
                 if clean:
                     rnum = random.randint(1000, 9999)
-                    profile["username"] = f"{clean}{rnum}"
+                    profile["username"] = f"{clean[:12]}{rnum}"
                     profile["email"]    = f"{clean}{rnum}@gmail.com"
                     profile["google"]   = profile["email"]
 
