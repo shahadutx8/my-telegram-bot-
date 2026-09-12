@@ -833,11 +833,40 @@
                  pattern="[a-z][a-z0-9_]{1,31}"/>
           <div style="margin-top:5px;font-size:12px;color:#666;">ইউজার লিখবে: /download myapp</div>
         </div>
+        <div class="form-group">
+          <label>Category</label>
+          <input type="text" id="file-category" placeholder="যেমন: Apps, Documents" class="names-input"/>
+        </div>
+        <div class="form-group">
+          <label>Version</label>
+          <input type="text" id="file-version" placeholder="যেমন: 1.0.0" class="names-input"/>
+        </div>
       </div>
       <div class="form-group">
         <label>Caption (optional)</label>
         <input type="text" id="file-caption" placeholder="ফাইল পাঠানোর সময় যে লেখা দেখাবে…" class="names-input"/>
       </div>
+      <div class="settings-grid" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr));">
+        <div class="form-group">
+          <label>Access</label>
+          <select id="file-access" class="names-input" onchange="toggleFileAccess()">
+            <option value="all">সব ইউজার</option>
+            <option value="selected">নির্দিষ্ট User ID</option>
+          </select>
+        </div>
+        <div class="form-group" id="file-allowed-wrap" style="display:none;">
+          <label>Allowed User IDs</label>
+          <input type="text" id="file-allowed" placeholder="123456789, 987654321" class="names-input"/>
+        </div>
+        <div class="form-group">
+          <label>Expiry (optional)</label>
+          <input type="datetime-local" id="file-expiry" class="names-input"/>
+        </div>
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:#c4b5fd;margin:4px 0 16px;cursor:pointer;">
+        <input type="checkbox" id="file-replace" style="accent-color:#7c63f5;width:16px;height:16px;"/>
+        একই command থাকলে পুরনো ফাইল replace/update করুন
+      </label>
       <div class="form-group">
         <label>ফাইল *</label>
         <input type="file" id="stored-file" style="width:100%;padding:10px;border-radius:9px;background:rgba(255,255,255,.07);color:#ddd;border:1px solid rgba(255,255,255,.15);"/>
@@ -2085,6 +2114,11 @@ function renderSendHistory() {
 }
 
 // ── Stored files for user downloads ──
+function toggleFileAccess() {
+  const mode = document.getElementById('file-access').value;
+  document.getElementById('file-allowed-wrap').style.display = mode === 'selected' ? '' : 'none';
+}
+
 async function loadStoredFiles() {
   try {
     const res = await fetch('/api/files');
@@ -2114,7 +2148,13 @@ function renderStoredFiles(files) {
       <div style="flex:1;min-width:200px;">
         <div style="font-weight:700;color:#e0d7ff;">${escHtml(f.title)}</div>
         <div style="font-size:12px;color:#999;margin-top:4px;">${escHtml(f.filename)} · ${formatFileSize(f.size)}</div>
-        <div style="font-size:12px;color:#a78bfa;margin-top:3px;">/download ${escHtml(f.command)}</div>
+        <div style="font-size:12px;color:#a78bfa;margin-top:3px;">/download ${escHtml(f.command)}
+          · ${escHtml(f.category || 'General')}${f.version ? ` · v${escHtml(f.version)}` : ''}</div>
+        <div style="font-size:12px;color:#4ade80;margin-top:3px;">
+          📥 ${Number(f.downloads || 0).toLocaleString()} downloads
+          · ${f.access_mode === 'selected' ? '🔒 নির্দিষ্ট users' : '🌐 সবাই'}
+          ${f.expires_at ? ` · ⏳ ${escHtml(f.expires_at)}` : ''}
+        </div>
       </div>
       <button class="btn btn-sm btn-red" onclick="deleteStoredFile('${f.id}')">🗑️ Delete</button>
     </div>`).join('');
@@ -2124,18 +2164,28 @@ async function uploadStoredFile() {
   const title = (document.getElementById('file-title').value || '').trim();
   const command = (document.getElementById('file-command').value || '').trim().toLowerCase().replace(/^\//, '');
   const caption = (document.getElementById('file-caption').value || '').trim();
+  const category = (document.getElementById('file-category').value || '').trim();
+  const version = (document.getElementById('file-version').value || '').trim();
+  const access = document.getElementById('file-access').value;
+  const allowed = (document.getElementById('file-allowed').value || '').trim();
+  const expiry = (document.getElementById('file-expiry').value || '').trim();
+  const replace = document.getElementById('file-replace').checked;
   const input = document.getElementById('stored-file');
   if (!title) { showMsg('file-msg', 'ফাইলের নাম দিন।', true); return; }
   if (!/^[a-z][a-z0-9_]{1,31}$/.test(command)) {
     showMsg('file-msg', 'কমান্ড 2–32 অক্ষরের ইংরেজি ছোট হাতের অক্ষর, সংখ্যা বা _ হতে হবে।', true); return;
   }
+  if (access === 'selected' && !allowed) { showMsg('file-msg', 'Allowed User ID দিন।', true); return; }
   if (!input.files.length) { showMsg('file-msg', 'ফাইল সিলেক্ট করুন।', true); return; }
   if (input.files[0].size > 50 * 1024 * 1024) { showMsg('file-msg', 'ফাইলের সর্বোচ্চ সাইজ 50 MB।', true); return; }
   const btn = document.getElementById('file-upload-btn');
   btn.disabled = true; btn.textContent = 'সেভ হচ্ছে…';
   const fd = new FormData();
   fd.append('title', title); fd.append('command', command);
-  fd.append('caption', caption); fd.append('file', input.files[0]);
+  fd.append('caption', caption); fd.append('category', category);
+  fd.append('version', version); fd.append('access_mode', access);
+  fd.append('allowed_users', allowed); fd.append('expires_at', expiry);
+  fd.append('replace', replace ? '1' : '0'); fd.append('file', input.files[0]);
   try {
     const res = await fetch('/api/files/upload', { method:'POST', body:fd });
     const data = await res.json();
@@ -2143,6 +2193,10 @@ async function uploadStoredFile() {
     if (data.success) {
       toast(data.message); document.getElementById('file-title').value = '';
       document.getElementById('file-command').value = ''; document.getElementById('file-caption').value = '';
+      document.getElementById('file-category').value = ''; document.getElementById('file-version').value = '';
+      document.getElementById('file-allowed').value = ''; document.getElementById('file-expiry').value = '';
+      document.getElementById('file-replace').checked = false; document.getElementById('file-access').value = 'all';
+      toggleFileAccess();
       input.value = ''; loadStoredFiles();
     }
   } catch { showMsg('file-msg', 'নেটওয়ার্ক ত্রুটি', true); }
@@ -2271,6 +2325,7 @@ async function resetAllBotTexts() {
 (async function init() {
   await loadCountrySelect();
   toggleWeekday();
+  toggleFileAccess();
 })();
 </script>
 </body>

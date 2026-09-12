@@ -35,7 +35,14 @@ def _get_db():
         try:
             if _db_conn is None or _db_conn.closed:
                 import psycopg2
-                _db_conn = psycopg2.connect(_DATABASE_URL, sslmode='require')
+                try:
+                    _db_conn = psycopg2.connect(_DATABASE_URL, sslmode='require')
+                except Exception as ssl_error:
+                    # Local development PostgreSQL may not expose SSL, while
+                    # hosted PostgreSQL connections generally do.
+                    if "does not support SSL" not in str(ssl_error):
+                        raise
+                    _db_conn = psycopg2.connect(_DATABASE_URL, sslmode='disable')
                 _db_conn.autocommit = True
                 with _db_conn.cursor() as cur:
                     cur.execute("""
@@ -77,6 +84,51 @@ def db_set(key: str, value) -> bool:
         return True
     except Exception as e:
         print(f"[DB] set({key}) error: {e}")
+        return False
+
+def db_set_blob(key: str, value: bytes) -> bool:
+    """Store binary data in PostgreSQL. Returns False when DB is unavailable."""
+    conn = _get_db()
+    if not conn:
+        return False
+    try:
+        import psycopg2
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO bot_file_blobs (key, data, updated_at)
+                VALUES (%s, %s, NOW())
+                ON CONFLICT (key) DO UPDATE
+                SET data = EXCLUDED.data, updated_at = NOW()
+            """, (key, psycopg2.Binary(value)))
+        return True
+    except Exception as e:
+        print(f"[DB] blob set({key}) error: {e}")
+        return False
+
+def db_get_blob(key: str):
+    """Return binary data for a key, or None when unavailable/missing."""
+    conn = _get_db()
+    if not conn:
+        return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT data FROM bot_file_blobs WHERE key = %s", (key,))
+            row = cur.fetchone()
+            return bytes(row[0]) if row else None
+    except Exception as e:
+        print(f"[DB] blob get({key}) error: {e}")
+        return None
+
+def db_delete_blob(key: str) -> bool:
+    conn = _get_db()
+    if not conn:
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM bot_file_blobs WHERE key = %s", (key,))
+        return True
+    except Exception as e:
+        print(f"[DB] blob delete({key}) error: {e}")
         return False
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -704,6 +756,9 @@ FILE_MAX_BYTES = 50 * 1024 * 1024
 stored_files_lock = Lock()
 
 def load_stored_files() -> list:
+    db_data = db_get("uploaded_files")
+    if isinstance(db_data, list):
+        return db_data
     try:
         with open(FILE_INDEX_PATH, "r", encoding="utf-8") as fh:
             data = json.load(fh)
@@ -712,6 +767,7 @@ def load_stored_files() -> list:
         return []
 
 def save_stored_files(files: list):
+    db_set("uploaded_files", files)
     os.makedirs(FILE_STORAGE_DIR, exist_ok=True)
     temp_path = FILE_INDEX_PATH + ".tmp"
     with open(temp_path, "w", encoding="utf-8") as fh:
@@ -725,18 +781,109 @@ def get_stored_file(command: str) -> dict | None:
     with stored_files_lock:
         return next((item for item in STORED_FILES if item.get("command") == command), None)
 
-def get_file_commands_text() -> str:
+def file_is_available(item: dict, user_id: int) -> bool:
+    """Check expiry and optional allow-list access for a stored file."""
+    expires_at = (item.get("expires_at") or "").strip()
+    if expires_at:
+        try:
+            if _dt.fromisoformat(expires_at) <= _dt.now():
+                return False
+        except ValueError:
+            pass
+    access_mode = item.get("access_mode", "all")
+    if access_mode == "selected":
+        allowed = {int(uid) for uid in item.get("allowed_users", []) if str(uid).lstrip("-").isdigit()}
+        if user_id not in allowed and user_id != get_admin_id():
+            return False
+    return True
+
+def get_available_stored_files(user_id: int) -> list:
     with stored_files_lock:
-        files = list(STORED_FILES)
+        return [item for item in STORED_FILES if file_is_available(item, user_id)]
+
+def get_file_commands_text(user_id: int | None = None) -> str:
+    with stored_files_lock:
+        files = [item for item in STORED_FILES if user_id is None or file_is_available(item, user_id)]
     if not files:
         return "📂 এখন কোনো ফাইল সংরক্ষিত নেই।"
-    lines = ["📂 *ডাউনলোড করা যায় এমন ফাইল:*\n"]
+    lines = ["📂 ডাউনলোড করা যায় এমন ফাইল:\n"]
     for item in files:
+        category = item.get("category", "General")
         lines.append(
-            f"• *{item.get('title') or item.get('filename', 'File')}* — "
-            f"`/download {item.get('command', '')}`"
+            f"• [{category}] {item.get('title') or item.get('filename', 'File')} — "
+            f"/download {item.get('command', '')}"
         )
     return "\n".join(lines)
+
+def build_file_keyboard(user_id: int):
+    files = get_available_stored_files(user_id)
+    if not files:
+        return None
+    keyboard = telebot.types.InlineKeyboardMarkup(row_width=1)
+    for item in files:
+        title = item.get("title") or item.get("filename", "File")
+        category = item.get("category", "General")
+        version = f" v{item['version']}" if item.get("version") else ""
+        keyboard.add(telebot.types.InlineKeyboardButton(
+            f"📥 [{category}] {title}{version}"[:64],
+            callback_data=f"file:{item.get('id', '')}",
+        ))
+    return keyboard
+
+def record_file_download(item_id: str, user):
+    with stored_files_lock:
+        item = next((entry for entry in STORED_FILES if entry.get("id") == item_id), None)
+        if not item:
+            return
+        item["downloads"] = int(item.get("downloads", 0) or 0) + 1
+        recent = item.get("last_downloads", [])
+        if not isinstance(recent, list):
+            recent = []
+        recent.insert(0, {
+            "user_id": user.id,
+            "username": user.username or "",
+            "first_name": user.first_name or "",
+            "timestamp": _dt.now().strftime("%Y-%m-%d %H:%M:%S"),
+        })
+        item["last_downloads"] = recent[:20]
+        try:
+            save_stored_files(STORED_FILES)
+        except OSError as exc:
+            print(f"[FileDownload] stats save error: {exc}")
+
+def send_stored_file(bot_instance, chat_id: int, item: dict, user) -> tuple[bool, str]:
+    if not file_is_available(item, user.id):
+        return False, "এই ফাইলটি আপনার জন্য অনুমোদিত নয় অথবা এর মেয়াদ শেষ হয়েছে।"
+    file_path = item.get("path", "")
+    file_handle = None
+    should_close = False
+    if file_path and os.path.isfile(file_path):
+        try:
+            file_handle = open(file_path, "rb")
+            should_close = True
+        except OSError:
+            file_handle = None
+    if file_handle is None and item.get("storage") == "database":
+        blob = db_get_blob(item.get("id", ""))
+        if blob:
+            file_handle = io.BytesIO(blob)
+            file_handle.name = item.get("filename", "download")
+    if file_handle is None:
+        return False, "ফাইলটি বর্তমানে পাওয়া যাচ্ছে না। অ্যাডমিনকে জানান।"
+    try:
+        bot_instance.send_document(
+            chat_id,
+            file_handle,
+            caption=item.get("caption") or item.get("title") or item.get("filename", ""),
+        )
+        record_file_download(item.get("id", ""), user)
+        return True, ""
+    except Exception as exc:
+        print(f"[FileDownload] id={item.get('id', '')} error: {exc}")
+        return False, "ফাইল পাঠানো যায়নি। একটু পরে আবার চেষ্টা করুন।"
+    finally:
+        if should_close:
+            file_handle.close()
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Broadcast state (in-memory)
@@ -962,7 +1109,30 @@ def register_handlers(b: telebot.TeleBot):
         if is_banned(message.from_user.id):
             b.reply_to(message, get_text("banned_reply"))
             return
-        b.reply_to(message, get_file_commands_text(), parse_mode="Markdown")
+        keyboard = build_file_keyboard(message.from_user.id)
+        b.reply_to(
+            message,
+            get_file_commands_text(message.from_user.id),
+            reply_markup=keyboard,
+        )
+
+    @b.callback_query_handler(func=lambda call: bool(call.data and call.data.startswith("file:")))
+    def download_file_button(call):
+        user = call.from_user
+        track_user(user.id, user.username, user.first_name)
+        try:
+            b.answer_callback_query(call.id, "ফাইল পাঠানো হচ্ছে…")
+        except Exception:
+            pass
+        file_id = call.data.split(":", 1)[1].strip()
+        with stored_files_lock:
+            item = next((entry.copy() for entry in STORED_FILES if entry.get("id") == file_id), None)
+        if not item:
+            b.send_message(call.message.chat.id, "❌ ফাইলটি আর পাওয়া যাচ্ছে না।")
+            return
+        ok, error = send_stored_file(b, call.message.chat.id, item, user)
+        if not ok:
+            b.send_message(call.message.chat.id, f"⚠️ {error}")
 
     @b.message_handler(commands=['download', 'getfile'])
     def download_stored_file(message):
@@ -976,27 +1146,17 @@ def register_handlers(b: telebot.TeleBot):
             b.reply_to(message, "📥 কমান্ড দিন: `/download command`", parse_mode="Markdown")
             return
         item = get_stored_file(command)
-        if not item:
+        if not item or not file_is_available(item, message.from_user.id):
             b.reply_to(
                 message,
-                f"❌ `{command}` নামে কোনো ফাইল পাওয়া যায়নি।\n\n{get_file_commands_text()}",
+                f"❌ `{command}` নামে কোনো ফাইল পাওয়া যায়নি, অথবা আপনার access নেই/মেয়াদ শেষ।\n\n"
+                f"{get_file_commands_text(message.from_user.id)}",
                 parse_mode="Markdown",
             )
             return
-        file_path = item.get("path", "")
-        if not file_path or not os.path.isfile(file_path):
-            b.reply_to(message, "⚠️ ফাইলটি বর্তমানে পাওয়া যাচ্ছে না। অ্যাডমিনকে জানান।")
-            return
-        try:
-            with open(file_path, "rb") as file_handle:
-                b.send_document(
-                    message.chat.id,
-                    file_handle,
-                    caption=item.get("caption") or item.get("title") or item.get("filename", ""),
-                )
-        except Exception as exc:
-            print(f"[FileDownload] command={command} error: {exc}")
-            b.reply_to(message, "⚠️ ফাইল পাঠানো যায়নি। একটু পরে আবার চেষ্টা করুন।")
+        ok, error = send_stored_file(b, message.chat.id, item, message.from_user)
+        if not ok:
+            b.reply_to(message, f"⚠️ {error}")
 
     @b.message_handler(commands=['ainame'])
     def send_ai_name(message):
@@ -2205,6 +2365,13 @@ def api_files():
                 "command": item.get("command", ""),
                 "filename": item.get("filename", ""),
                 "caption": item.get("caption", ""),
+                "category": item.get("category", "General"),
+                "version": item.get("version", ""),
+                "access_mode": item.get("access_mode", "all"),
+                "allowed_users": item.get("allowed_users", []),
+                "expires_at": item.get("expires_at", ""),
+                "downloads": int(item.get("downloads", 0) or 0),
+                "last_downloads": item.get("last_downloads", [])[-5:],
                 "size": item.get("size", 0),
                 "created_at": item.get("created_at", ""),
             }
@@ -2218,6 +2385,12 @@ def api_files_upload():
     title = request.form.get("title", "").strip()
     command = request.form.get("command", "").strip().lstrip("/").lower()
     caption = request.form.get("caption", "").strip()
+    category = request.form.get("category", "").strip()[:40] or "General"
+    version = request.form.get("version", "").strip()[:30]
+    access_mode = request.form.get("access_mode", "all").strip().lower()
+    allowed_raw = request.form.get("allowed_users", "").strip()
+    expires_at = request.form.get("expires_at", "").strip()
+    replace = request.form.get("replace", "").strip().lower() in {"1", "true", "yes", "on"}
     file_obj = request.files.get("file")
 
     if not title:
@@ -2227,6 +2400,22 @@ def api_files_upload():
             success=False,
             error="কমান্ড 2–32 অক্ষরের হতে হবে; শুধু ইংরেজি ছোট হাতের অক্ষর, সংখ্যা ও _ ব্যবহার করুন।",
         )
+    if access_mode not in {"all", "selected"}:
+        return jsonify(success=False, error="Access mode সঠিক নয়।")
+    allowed_users = []
+    if access_mode == "selected":
+        try:
+            allowed_users = sorted({int(value.strip()) for value in allowed_raw.split(",") if value.strip()})
+        except ValueError:
+            return jsonify(success=False, error="Allowed User ID কমা দিয়ে সঠিকভাবে দিন।")
+        if not allowed_users:
+            return jsonify(success=False, error="Selected users access-এর জন্য অন্তত একটি User ID দিন।")
+    if expires_at:
+        try:
+            if _dt.fromisoformat(expires_at) <= _dt.now():
+                return jsonify(success=False, error="Expiry সময় ভবিষ্যতের হতে হবে।")
+        except ValueError:
+            return jsonify(success=False, error="Expiry সময় সঠিক নয়।")
     if not file_obj or not file_obj.filename:
         return jsonify(success=False, error="ফাইল সিলেক্ট করুন।")
 
@@ -2238,7 +2427,11 @@ def api_files_upload():
         return jsonify(success=False, error="ফাইলের সর্বোচ্চ সাইজ 50 MB।")
 
     with stored_files_lock:
-        if any(item.get("command") == command for item in STORED_FILES):
+        existing_index = next(
+            (i for i, item in enumerate(STORED_FILES) if item.get("command") == command),
+            None,
+        )
+        if existing_index is not None and not replace:
             return jsonify(success=False, error=f"/download {command} ইতিমধ্যে ব্যবহার করা হয়েছে।")
         os.makedirs(FILE_STORAGE_DIR, exist_ok=True)
         stored_name = f"{secrets_module.token_hex(16)}_{filename}"
@@ -2250,29 +2443,50 @@ def api_files_upload():
             print(f"[FileUpload] save error: {exc}")
             return jsonify(success=False, error="ফাইল সংরক্ষণ করা যায়নি।")
 
+        existing = STORED_FILES[existing_index] if existing_index is not None else {}
         item = {
-            "id": secrets_module.token_hex(8),
+            "id": existing.get("id") or secrets_module.token_hex(8),
             "title": title,
             "command": command,
             "caption": caption,
+            "category": category,
+            "version": version,
+            "access_mode": access_mode,
+            "allowed_users": allowed_users,
+            "expires_at": expires_at,
             "filename": filename,
             "path": file_path,
             "size": len(raw),
             "created_at": _dt.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "downloads": int(existing.get("downloads", 0) or 0),
+            "last_downloads": existing.get("last_downloads", []),
         }
-        STORED_FILES.append(item)
+        item["storage"] = "database" if db_set_blob(item["id"], raw) else "disk"
+        if existing_index is None:
+            STORED_FILES.append(item)
+        else:
+            STORED_FILES[existing_index] = item
         try:
             save_stored_files(STORED_FILES)
         except OSError as exc:
-            STORED_FILES.pop()
+            if existing_index is None:
+                STORED_FILES.pop()
+            else:
+                STORED_FILES[existing_index] = existing
             try:
                 os.remove(file_path)
             except OSError:
                 pass
             print(f"[FileUpload] index save error: {exc}")
             return jsonify(success=False, error="ফাইলের তথ্য সংরক্ষণ করা যায়নি।")
+        if existing_index is not None and existing.get("path") and existing.get("path") != file_path:
+            try:
+                os.remove(existing["path"])
+            except OSError:
+                pass
 
-    return jsonify(success=True, message=f"✅ ফাইল সেভ হয়েছে। ইউজার ব্যবহার করবে: /download {command}")
+    action = "আপডেট" if existing_index is not None else "সেভ"
+    return jsonify(success=True, message=f"✅ ফাইল {action} হয়েছে। ইউজার ব্যবহার করবে: /download {command}")
 
 @app.route('/api/files/delete', methods=['POST'])
 @login_required
@@ -2294,6 +2508,7 @@ def api_files_delete():
             os.remove(item.get("path", ""))
         except OSError:
             pass
+        db_delete_blob(item.get("id", ""))
     return jsonify(success=True, message="🗑️ ফাইল মুছে ফেলা হয়েছে।")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
