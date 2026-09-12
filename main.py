@@ -253,6 +253,19 @@ DEFAULT_BOT_TEXTS = {
         "📋 /history — আগের প্রোফাইল দেখুন\n"
         "🤖 /ainame [দেশ] — AI দিয়ে real-style নাম তৈরি করুন"
     ),
+    "user_menu": (
+        "📱 *বট মেনু*\n\n"
+        "নিচের বাটন থেকে একটি অপশন বেছে নিন।"
+    ),
+    "country_menu": "{icon} কোন দেশের প্রোফাইল চান? একটি দেশ নির্বাচন করুন:",
+    "help": (
+        "❓ *কীভাবে ব্যবহার করবেন*\n\n"
+        "⚡ Generate Profile চাপুন, তারপর দেশ নির্বাচন করুন।\n"
+        "🤖 AI Name চাপলে AI দিয়ে নামসহ প্রোফাইল তৈরি হবে।\n"
+        "📋 My History দিয়ে আগের প্রোফাইল দেখুন।\n"
+        "📂 Files দিয়ে আপনার জন্য উন্মুক্ত ফাইল দেখুন।\n\n"
+        "আপনি চাইলে সরাসরি দেশের নাম লিখেও প্রোফাইল তৈরি করতে পারেন।"
+    ),
     # admin notification — new user joined
     "new_user_notify": (
         "🆕 *নতুন ইউজার জয়েন করেছে!*\n\n"
@@ -1037,6 +1050,177 @@ def register_handlers(b: telebot.TeleBot):
     def _get_enabled_fields():
         return CONFIG.get("bot_reply_fields", FIELD_KEYS)
 
+    USER_MENU_BUTTONS = {
+        "generate": "⚡ Generate Profile",
+        "ai":       "🤖 AI Name",
+        "history":  "📋 My History",
+        "files":    "📂 Files",
+        "help":     "❓ Help",
+    }
+
+    def _user_menu_keyboard():
+        keyboard = telebot.types.ReplyKeyboardMarkup(
+            resize_keyboard=True,
+            row_width=2,
+        )
+        keyboard.add(
+            telebot.types.KeyboardButton(USER_MENU_BUTTONS["generate"]),
+            telebot.types.KeyboardButton(USER_MENU_BUTTONS["ai"]),
+        )
+        keyboard.add(
+            telebot.types.KeyboardButton(USER_MENU_BUTTONS["history"]),
+            telebot.types.KeyboardButton(USER_MENU_BUTTONS["files"]),
+        )
+        keyboard.add(telebot.types.KeyboardButton(USER_MENU_BUTTONS["help"]))
+        return keyboard
+
+    def _country_keyboard(action: str):
+        keyboard = telebot.types.InlineKeyboardMarkup(row_width=2)
+        buttons = []
+        seen = set()
+        for country in get_country_details():
+            # "bd" is an alias for Bangladesh; show it only once.
+            canonical = "bangladesh" if country == "bd" else country
+            if canonical in seen:
+                continue
+            seen.add(canonical)
+            buttons.append(
+                telebot.types.InlineKeyboardButton(
+                    f"🌍 {canonical.capitalize()}",
+                    callback_data=f"menu:{action}:{canonical}",
+                )
+            )
+        keyboard.add(*buttons)
+        return keyboard
+
+    def _send_user_menu(message):
+        b.reply_to(
+            message,
+            get_text("user_menu"),
+            reply_markup=_user_menu_keyboard(),
+            parse_mode="Markdown",
+        )
+
+    def _send_country_menu(message, action: str):
+        icon = "🤖" if action == "ai" else "⚡"
+        b.reply_to(
+            message,
+            get_text("country_menu", icon=icon),
+            reply_markup=_country_keyboard(action),
+        )
+
+    def _send_generated_profile(chat_id, user, country_input):
+        """Generate and send a regular profile from a menu or typed country."""
+        if is_banned(user.id):
+            b.send_message(chat_id, get_text("banned_reply"))
+            return
+        try:
+            country_details = get_country_details()
+            profile = generate_profile(country_input)
+            if not profile:
+                b.send_message(chat_id, get_text("profile_failed"))
+                return
+            recent_log.append(profile)
+            Thread(target=record_user_profile, args=(user.id, profile), daemon=True).start()
+            if country_details[country_input].get("is_bd"):
+                log_name_usage(
+                    bd_name=profile["full_name"],
+                    user_id=user.id,
+                    username=user.username,
+                    first_name=user.first_name,
+                )
+            track_user(user.id, user.username, user.first_name, increment_count=True)
+            enabled = _get_enabled_fields()
+            field_lines = ""
+            for key in FIELD_KEYS:
+                if key in enabled and key in profile:
+                    field_lines += f"{FIELD_EMOJI[key]} {FIELD_LABELS[key]}: `{profile[key]}`\n"
+            tg = user.username
+            tg_mention = f"@{tg}" if tg else "Not Available"
+            dev_name = get_developer_name()
+            dev_line = f"👤 Developer: {dev_name}\n" if dev_name else ""
+            b.send_message(
+                chat_id,
+                get_text(
+                    "profile_reply",
+                    dev_line=dev_line,
+                    tg_mention=tg_mention,
+                    country=country_input.capitalize(),
+                    field_lines=field_lines,
+                ),
+                parse_mode="Markdown",
+            )
+        except Exception:
+            b.send_message(chat_id, get_text("profile_failed"))
+
+    def _run_ai_generation(chat_id, user, country_arg):
+        """Generate an AI-assisted profile and send it asynchronously."""
+        if is_banned(user.id):
+            b.send_message(chat_id, get_text("banned_reply"))
+            return
+        if not _GEMINI_KEY:
+            b.send_message(chat_id, get_text("ai_unavailable"))
+            return
+        country_details = get_country_details()
+        if country_arg not in country_details:
+            keys = ", ".join(k.capitalize() for k in country_details.keys())
+            b.send_message(chat_id, get_text("ai_unknown_country", keys=keys))
+            return
+
+        wait_msg = b.send_message(chat_id, get_text("ai_generating"))
+
+        def _do_ainame():
+            ai_name = generate_ai_name(country_arg)
+            profile = generate_profile(country_arg)
+            if not profile:
+                try:
+                    b.delete_message(chat_id, wait_msg.message_id)
+                except Exception:
+                    pass
+                b.send_message(chat_id, get_text("ai_profile_failed"))
+                return
+
+            if ai_name:
+                profile["full_name"] = ai_name
+                profile["facebook_id"] = ai_name
+                clean = re.sub(r"[^a-zA-Z0-9]", "", ai_name).lower()
+                if clean:
+                    rnum = random.randint(1000, 9999)
+                    profile["username"] = f"{clean[:12]}{rnum}"
+                    profile["email"] = f"{clean}{rnum}@gmail.com"
+                    profile["google"] = profile["email"]
+
+            Thread(target=record_user_profile, args=(user.id, profile), daemon=True).start()
+            enabled = _get_enabled_fields()
+            field_lines = ""
+            for key in FIELD_KEYS:
+                if key in enabled and key in profile:
+                    field_lines += f"{FIELD_EMOJI[key]} {FIELD_LABELS[key]}: `{profile[key]}`\n"
+
+            dev_name = get_developer_name()
+            dev_line = f"👤 Developer: {dev_name}\n" if dev_name else ""
+            tg = user.username
+            tg_mention = f"@{tg}" if tg else "Not Available"
+            ai_badge = "🤖 *AI Generated*" if ai_name else "⚡ *Auto Generated*"
+            try:
+                b.delete_message(chat_id, wait_msg.message_id)
+            except Exception:
+                pass
+            b.send_message(
+                chat_id,
+                get_text(
+                    "ai_reply",
+                    dev_line=dev_line,
+                    ai_badge=ai_badge,
+                    tg_mention=tg_mention,
+                    country=country_arg.capitalize(),
+                    field_lines=field_lines,
+                ),
+                parse_mode="Markdown",
+            )
+
+        Thread(target=_do_ainame, daemon=True).start()
+
     @b.message_handler(commands=['start'])
     def send_welcome(message):
         is_new = track_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
@@ -1047,7 +1231,7 @@ def register_handlers(b: telebot.TeleBot):
             country_keys=country_keys,
             used_count=f"{used_count:,}",
             remaining=f"{remaining:,}",
-        ))
+        ), reply_markup=_user_menu_keyboard())
         if is_new:
             user = message.from_user
             uname    = f"@{user.username}" if user.username else "N/A"
@@ -1158,81 +1342,70 @@ def register_handlers(b: telebot.TeleBot):
         if not ok:
             b.reply_to(message, f"⚠️ {error}")
 
-    @b.message_handler(commands=['ainame'])
-    def send_ai_name(message):
-        track_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
-
+    @b.message_handler(commands=['help'])
+    def help_command(message):
         if is_banned(message.from_user.id):
             b.reply_to(message, get_text("banned_reply"))
             return
+        track_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
+        b.reply_to(
+            message,
+            get_text("help"),
+            reply_markup=_user_menu_keyboard(),
+            parse_mode="Markdown",
+        )
 
-        if not _GEMINI_KEY:
-            b.reply_to(message, get_text("ai_unavailable"))
+    @b.message_handler(func=lambda message: (message.text or "").strip() == USER_MENU_BUTTONS["generate"])
+    def menu_generate(message):
+        if is_banned(message.from_user.id):
+            b.reply_to(message, get_text("banned_reply"))
             return
+        _send_country_menu(message, "generate")
 
+    @b.message_handler(func=lambda message: (message.text or "").strip() == USER_MENU_BUTTONS["ai"])
+    def menu_ai(message):
+        if is_banned(message.from_user.id):
+            b.reply_to(message, get_text("banned_reply"))
+            return
+        _send_country_menu(message, "ai")
+
+    @b.message_handler(func=lambda message: (message.text or "").strip() == USER_MENU_BUTTONS["history"])
+    def menu_history(message):
+        send_history(message)
+
+    @b.message_handler(func=lambda message: (message.text or "").strip() == USER_MENU_BUTTONS["files"])
+    def menu_files(message):
+        list_downloadable_files(message)
+
+    @b.message_handler(func=lambda message: (message.text or "").strip() == USER_MENU_BUTTONS["help"])
+    def menu_help(message):
+        help_command(message)
+
+    @b.callback_query_handler(func=lambda call: bool(call.data and call.data.startswith("menu:")))
+    def menu_callback(call):
+        try:
+            b.answer_callback_query(call.id)
+        except Exception:
+            pass
+        parts = call.data.split(":", 2)
+        if len(parts) != 3:
+            return
+        action, country = parts[1], parts[2].lower()
+        user = call.from_user
+        if is_banned(user.id):
+            b.send_message(call.message.chat.id, get_text("banned_reply"))
+            return
+        if action == "generate":
+            _send_generated_profile(call.message.chat.id, user, country)
+        elif action == "ai":
+            _run_ai_generation(call.message.chat.id, user, country)
+
+    @b.message_handler(commands=['ainame'])
+    def send_ai_name(message):
+        track_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
         parts       = message.text.strip().split(maxsplit=1)
         country_arg = parts[1].strip().lower() if len(parts) > 1 else "bangladesh"
-
-        country_details = get_country_details()
-        if country_arg not in country_details:
-            keys = ", ".join(k.capitalize() for k in country_details.keys())
-            b.reply_to(message, get_text("ai_unknown_country", keys=keys))
-            return
-
-        wait_msg = b.reply_to(message, get_text("ai_generating"))
-
-        def _do_ainame():
-            ai_name = generate_ai_name(country_arg)
-
-            # Fall back to regular generation if AI fails
-            profile = generate_profile(country_arg)
-            if not profile:
-                try:
-                    b.delete_message(message.chat.id, wait_msg.message_id)
-                except Exception:
-                    pass
-                b.reply_to(message, get_text("ai_profile_failed"))
-                return
-
-            if ai_name:
-                profile["full_name"]   = ai_name
-                profile["facebook_id"] = ai_name
-                clean = re.sub(r'[^a-zA-Z0-9]', '', ai_name).lower()
-                if clean:
-                    rnum = random.randint(1000, 9999)
-                    profile["username"] = f"{clean[:12]}{rnum}"
-                    profile["email"]    = f"{clean}{rnum}@gmail.com"
-                    profile["google"]   = profile["email"]
-
-            Thread(target=record_user_profile, args=(message.from_user.id, profile), daemon=True).start()
-
-            enabled = _get_enabled_fields()
-            field_lines = ""
-            for key in FIELD_KEYS:
-                if key in enabled and key in profile:
-                    field_lines += f"{FIELD_EMOJI[key]} {FIELD_LABELS[key]}: `{profile[key]}`\n"
-
-            dev_name   = get_developer_name()
-            dev_line   = f"👤 Developer: {dev_name}\n" if dev_name else ""
-            tg         = message.from_user.username
-            tg_mention = f"@{tg}" if tg else "Not Available"
-            ai_badge   = "🤖 *AI Generated*" if ai_name else "⚡ *Auto Generated*"
-
-            try:
-                b.delete_message(message.chat.id, wait_msg.message_id)
-            except Exception:
-                pass
-
-            b.reply_to(message,
-                get_text("ai_reply",
-                    dev_line=dev_line, ai_badge=ai_badge,
-                    tg_mention=tg_mention, country=country_arg.capitalize(),
-                    field_lines=field_lines,
-                ),
-                parse_mode="Markdown"
-            )
-
-        Thread(target=_do_ainame, daemon=True).start()
+        _run_ai_generation(message.chat.id, message.from_user, country_arg)
 
     # ────────────────────────────────────────────
     # Admin Bot Commands — Dashboard Control via Bot
