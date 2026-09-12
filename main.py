@@ -694,6 +694,51 @@ def record_user_profile(user_id: int, profile: dict):
         save_user_profiles(USER_PROFILES)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Admin File Library
+# Files uploaded from the dashboard are kept on disk and sent as Telegram
+# documents when a user requests them with /download <command>.
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FILE_STORAGE_DIR = "bot_files"
+FILE_INDEX_PATH = "uploaded_files.json"
+FILE_MAX_BYTES = 50 * 1024 * 1024
+stored_files_lock = Lock()
+
+def load_stored_files() -> list:
+    try:
+        with open(FILE_INDEX_PATH, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, list) else []
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return []
+
+def save_stored_files(files: list):
+    os.makedirs(FILE_STORAGE_DIR, exist_ok=True)
+    temp_path = FILE_INDEX_PATH + ".tmp"
+    with open(temp_path, "w", encoding="utf-8") as fh:
+        json.dump(files, fh, ensure_ascii=False, indent=2)
+    os.replace(temp_path, FILE_INDEX_PATH)
+
+STORED_FILES: list = load_stored_files()
+
+def get_stored_file(command: str) -> dict | None:
+    command = (command or "").strip().lstrip("/").lower()
+    with stored_files_lock:
+        return next((item for item in STORED_FILES if item.get("command") == command), None)
+
+def get_file_commands_text() -> str:
+    with stored_files_lock:
+        files = list(STORED_FILES)
+    if not files:
+        return "📂 এখন কোনো ফাইল সংরক্ষিত নেই।"
+    lines = ["📂 *ডাউনলোড করা যায় এমন ফাইল:*\n"]
+    for item in files:
+        lines.append(
+            f"• *{item.get('title') or item.get('filename', 'File')}* — "
+            f"`/download {item.get('command', '')}`"
+        )
+    return "\n".join(lines)
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Broadcast state (in-memory)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 broadcast_status = {"running": False, "total": 0, "sent": 0, "failed": 0, "done": False, "message": ""}
@@ -911,6 +956,48 @@ def register_handlers(b: telebot.TeleBot):
         lines.append(get_text("history_copy_hint"))
         b.reply_to(message, "\n".join(lines), parse_mode="Markdown")
 
+    @b.message_handler(commands=['files'])
+    def list_downloadable_files(message):
+        track_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
+        if is_banned(message.from_user.id):
+            b.reply_to(message, get_text("banned_reply"))
+            return
+        b.reply_to(message, get_file_commands_text(), parse_mode="Markdown")
+
+    @b.message_handler(commands=['download', 'getfile'])
+    def download_stored_file(message):
+        track_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
+        if is_banned(message.from_user.id):
+            b.reply_to(message, get_text("banned_reply"))
+            return
+        parts = (message.text or "").strip().split(maxsplit=1)
+        command = parts[1].strip().lstrip("/").lower() if len(parts) > 1 else ""
+        if not command:
+            b.reply_to(message, "📥 কমান্ড দিন: `/download command`", parse_mode="Markdown")
+            return
+        item = get_stored_file(command)
+        if not item:
+            b.reply_to(
+                message,
+                f"❌ `{command}` নামে কোনো ফাইল পাওয়া যায়নি।\n\n{get_file_commands_text()}",
+                parse_mode="Markdown",
+            )
+            return
+        file_path = item.get("path", "")
+        if not file_path or not os.path.isfile(file_path):
+            b.reply_to(message, "⚠️ ফাইলটি বর্তমানে পাওয়া যাচ্ছে না। অ্যাডমিনকে জানান।")
+            return
+        try:
+            with open(file_path, "rb") as file_handle:
+                b.send_document(
+                    message.chat.id,
+                    file_handle,
+                    caption=item.get("caption") or item.get("title") or item.get("filename", ""),
+                )
+        except Exception as exc:
+            print(f"[FileDownload] command={command} error: {exc}")
+            b.reply_to(message, "⚠️ ফাইল পাঠানো যায়নি। একটু পরে আবার চেষ্টা করুন।")
+
     @b.message_handler(commands=['ainame'])
     def send_ai_name(message):
         track_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
@@ -1022,6 +1109,9 @@ def register_handlers(b: telebot.TeleBot):
             "• /reset — ব্যবহৃত নাম রিসেট\n\n"
             "📢 *ব্রডকাস্ট*\n"
             "• /broadcast `<টেক্সট>` — সবাইকে মেসেজ\n\n"
+            "📂 *ফাইল ডাউনলোড*\n"
+            "• /files — সংরক্ষিত ফাইলের তালিকা\n"
+            "• /download `<কমান্ড>` — ফাইল পাঠান\n\n"
             "🛑 *বট স্টপ*\n"
             "• /stopbot — পোলিং বন্ধ করুন",
             parse_mode="Markdown"
@@ -2100,6 +2190,111 @@ def api_schedules_toggle():
         save_schedules(SCHEDULES)
     return jsonify(success=True, active=sched['active'],
                    message=f"✅ {'চালু' if sched['active'] else 'বন্ধ'} করা হয়েছে।")
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Flask Routes — Admin File Library
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+@app.route('/api/files', methods=['GET'])
+@login_required
+def api_files():
+    with stored_files_lock:
+        entries = [
+            {
+                "id": item.get("id", ""),
+                "title": item.get("title", ""),
+                "command": item.get("command", ""),
+                "filename": item.get("filename", ""),
+                "caption": item.get("caption", ""),
+                "size": item.get("size", 0),
+                "created_at": item.get("created_at", ""),
+            }
+            for item in STORED_FILES
+        ]
+    return jsonify(success=True, files=entries)
+
+@app.route('/api/files/upload', methods=['POST'])
+@login_required
+def api_files_upload():
+    title = request.form.get("title", "").strip()
+    command = request.form.get("command", "").strip().lstrip("/").lower()
+    caption = request.form.get("caption", "").strip()
+    file_obj = request.files.get("file")
+
+    if not title:
+        return jsonify(success=False, error="ফাইলের একটি নাম দিন।")
+    if not re.fullmatch(r"[a-z][a-z0-9_]{1,31}", command):
+        return jsonify(
+            success=False,
+            error="কমান্ড 2–32 অক্ষরের হতে হবে; শুধু ইংরেজি ছোট হাতের অক্ষর, সংখ্যা ও _ ব্যবহার করুন।",
+        )
+    if not file_obj or not file_obj.filename:
+        return jsonify(success=False, error="ফাইল সিলেক্ট করুন।")
+
+    filename = os.path.basename(file_obj.filename).strip() or "download"
+    raw = file_obj.read()
+    if not raw:
+        return jsonify(success=False, error="খালি ফাইল আপলোড করা যাবে না।")
+    if len(raw) > FILE_MAX_BYTES:
+        return jsonify(success=False, error="ফাইলের সর্বোচ্চ সাইজ 50 MB।")
+
+    with stored_files_lock:
+        if any(item.get("command") == command for item in STORED_FILES):
+            return jsonify(success=False, error=f"/download {command} ইতিমধ্যে ব্যবহার করা হয়েছে।")
+        os.makedirs(FILE_STORAGE_DIR, exist_ok=True)
+        stored_name = f"{secrets_module.token_hex(16)}_{filename}"
+        file_path = os.path.join(FILE_STORAGE_DIR, stored_name)
+        try:
+            with open(file_path, "wb") as fh:
+                fh.write(raw)
+        except OSError as exc:
+            print(f"[FileUpload] save error: {exc}")
+            return jsonify(success=False, error="ফাইল সংরক্ষণ করা যায়নি।")
+
+        item = {
+            "id": secrets_module.token_hex(8),
+            "title": title,
+            "command": command,
+            "caption": caption,
+            "filename": filename,
+            "path": file_path,
+            "size": len(raw),
+            "created_at": _dt.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        STORED_FILES.append(item)
+        try:
+            save_stored_files(STORED_FILES)
+        except OSError as exc:
+            STORED_FILES.pop()
+            try:
+                os.remove(file_path)
+            except OSError:
+                pass
+            print(f"[FileUpload] index save error: {exc}")
+            return jsonify(success=False, error="ফাইলের তথ্য সংরক্ষণ করা যায়নি।")
+
+    return jsonify(success=True, message=f"✅ ফাইল সেভ হয়েছে। ইউজার ব্যবহার করবে: /download {command}")
+
+@app.route('/api/files/delete', methods=['POST'])
+@login_required
+def api_files_delete():
+    data = request.get_json(force=True) or {}
+    file_id = str(data.get("id", "")).strip()
+    with stored_files_lock:
+        index = next((i for i, item in enumerate(STORED_FILES) if item.get("id") == file_id), None)
+        if index is None:
+            return jsonify(success=False, error="ফাইল পাওয়া যায়নি।")
+        item = STORED_FILES.pop(index)
+        try:
+            save_stored_files(STORED_FILES)
+        except OSError as exc:
+            STORED_FILES.insert(index, item)
+            print(f"[FileDelete] index save error: {exc}")
+            return jsonify(success=False, error="ফাইল মুছে ফেলা যায়নি।")
+        try:
+            os.remove(item.get("path", ""))
+        except OSError:
+            pass
+    return jsonify(success=True, message="🗑️ ফাইল মুছে ফেলা হয়েছে।")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Flask Routes — Send Media to User(s)

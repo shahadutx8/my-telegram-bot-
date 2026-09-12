@@ -280,6 +280,7 @@
     <button class="tab-btn" onclick="switchTab('broadcast',this)">📢 Broadcast</button>
     <button class="tab-btn" onclick="switchTab('schedule',this)">📅 Schedule</button>
     <button class="tab-btn" onclick="switchTab('sendmedia',this)">📨 Send</button>
+    <button class="tab-btn" onclick="switchTab('files',this)">📂 Files</button>
     <button class="tab-btn" onclick="switchTab('log',this)">📜 Log</button>
     <button class="tab-btn" onclick="switchTab('texts',this)">✏️ Texts</button>
     <button class="tab-btn" onclick="switchTab('settings',this)">⚙️ Settings</button>
@@ -810,6 +811,43 @@
     <div class="section">
       <h2>📋 পাঠানো ইতিহাস</h2>
       <div id="sm-history" style="font-size:13px;color:#666;">এই session-এ কিছু পাঠানো হয়নি।</div>
+    </div>
+  </div>
+
+  <!-- ══ FILE LIBRARY TAB ══ -->
+  <div id="tab-files" class="page">
+    <div class="section" style="margin-bottom:18px;">
+      <h2>📂 ইউজারদের জন্য ফাইল সংরক্ষণ</h2>
+      <p style="font-size:13px;color:#aaa;margin-bottom:18px;">
+        এখানে ফাইল আপলোড করলে ইউজার <code style="color:#c4b5fd;">/download কমান্ড</code> দিয়ে সেটি পাবে।
+        সর্বোচ্চ ফাইল সাইজ 50 MB।
+      </p>
+      <div class="settings-grid" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr));">
+        <div class="form-group">
+          <label>ফাইলের নাম *</label>
+          <input type="text" id="file-title" placeholder="যেমন: Android App" class="names-input"/>
+        </div>
+        <div class="form-group">
+          <label>ডাউনলোড কমান্ড *</label>
+          <input type="text" id="file-command" placeholder="যেমন: myapp" class="names-input"
+                 pattern="[a-z][a-z0-9_]{1,31}"/>
+          <div style="margin-top:5px;font-size:12px;color:#666;">ইউজার লিখবে: /download myapp</div>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Caption (optional)</label>
+        <input type="text" id="file-caption" placeholder="ফাইল পাঠানোর সময় যে লেখা দেখাবে…" class="names-input"/>
+      </div>
+      <div class="form-group">
+        <label>ফাইল *</label>
+        <input type="file" id="stored-file" style="width:100%;padding:10px;border-radius:9px;background:rgba(255,255,255,.07);color:#ddd;border:1px solid rgba(255,255,255,.15);"/>
+      </div>
+      <button class="btn btn-purple" onclick="uploadStoredFile()" id="file-upload-btn">📤 ফাইল সেভ করুন</button>
+      <div class="form-msg" id="file-msg"></div>
+    </div>
+    <div class="section">
+      <h2>📋 সংরক্ষিত ফাইল</h2>
+      <div id="stored-files-list" style="font-size:13px;color:#666;">লোড হচ্ছে…</div>
     </div>
   </div>
 
@@ -1355,6 +1393,7 @@ function switchTab(name, btn) {
   if (name === 'broadcast') loadBroadcastUserCount();
   if (name === 'schedule')  loadSchedules();
   if (name === 'sendmedia') loadSendMediaUsers();
+  if (name === 'files')     loadStoredFiles();
 }
 
 // ── Countries management ──
@@ -2043,6 +2082,79 @@ function renderSendHistory() {
         <div style="font-size:12px;color:#666;">✅ ${h.sent} সফল ${h.failed ? `❌ ${h.failed} ব্যর্থ` : ''} · ${h.time}</div>
       </div>
     </div>`).join('');
+}
+
+// ── Stored files for user downloads ──
+async function loadStoredFiles() {
+  try {
+    const res = await fetch('/api/files');
+    const data = await res.json();
+    if (!data.success) { toast(data.error || 'ফাইল লোড ব্যর্থ', true); return; }
+    renderStoredFiles(data.files || []);
+  } catch { toast('নেটওয়ার্ক ত্রুটি', true); }
+}
+
+function formatFileSize(bytes) {
+  if (!bytes) return '0 B';
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+function renderStoredFiles(files) {
+  const el = document.getElementById('stored-files-list');
+  if (!el) return;
+  if (!files.length) {
+    el.innerHTML = '<div style="text-align:center;padding:30px;color:#666;">কোনো ফাইল নেই। উপরের ফর্ম দিয়ে আপলোড করুন।</div>';
+    return;
+  }
+  el.innerHTML = files.map(f => `
+    <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:13px 0;border-bottom:1px solid rgba(255,255,255,.07);">
+      <div style="font-size:25px;">📄</div>
+      <div style="flex:1;min-width:200px;">
+        <div style="font-weight:700;color:#e0d7ff;">${escHtml(f.title)}</div>
+        <div style="font-size:12px;color:#999;margin-top:4px;">${escHtml(f.filename)} · ${formatFileSize(f.size)}</div>
+        <div style="font-size:12px;color:#a78bfa;margin-top:3px;">/download ${escHtml(f.command)}</div>
+      </div>
+      <button class="btn btn-sm btn-red" onclick="deleteStoredFile('${f.id}')">🗑️ Delete</button>
+    </div>`).join('');
+}
+
+async function uploadStoredFile() {
+  const title = (document.getElementById('file-title').value || '').trim();
+  const command = (document.getElementById('file-command').value || '').trim().toLowerCase().replace(/^\//, '');
+  const caption = (document.getElementById('file-caption').value || '').trim();
+  const input = document.getElementById('stored-file');
+  if (!title) { showMsg('file-msg', 'ফাইলের নাম দিন।', true); return; }
+  if (!/^[a-z][a-z0-9_]{1,31}$/.test(command)) {
+    showMsg('file-msg', 'কমান্ড 2–32 অক্ষরের ইংরেজি ছোট হাতের অক্ষর, সংখ্যা বা _ হতে হবে।', true); return;
+  }
+  if (!input.files.length) { showMsg('file-msg', 'ফাইল সিলেক্ট করুন।', true); return; }
+  if (input.files[0].size > 50 * 1024 * 1024) { showMsg('file-msg', 'ফাইলের সর্বোচ্চ সাইজ 50 MB।', true); return; }
+  const btn = document.getElementById('file-upload-btn');
+  btn.disabled = true; btn.textContent = 'সেভ হচ্ছে…';
+  const fd = new FormData();
+  fd.append('title', title); fd.append('command', command);
+  fd.append('caption', caption); fd.append('file', input.files[0]);
+  try {
+    const res = await fetch('/api/files/upload', { method:'POST', body:fd });
+    const data = await res.json();
+    showMsg('file-msg', data.message || data.error, !data.success);
+    if (data.success) {
+      toast(data.message); document.getElementById('file-title').value = '';
+      document.getElementById('file-command').value = ''; document.getElementById('file-caption').value = '';
+      input.value = ''; loadStoredFiles();
+    }
+  } catch { showMsg('file-msg', 'নেটওয়ার্ক ত্রুটি', true); }
+  btn.disabled = false; btn.textContent = '📤 ফাইল সেভ করুন';
+}
+
+async function deleteStoredFile(id) {
+  if (!confirm('এই ফাইলটি মুছে ফেলবেন?')) return;
+  const data = await apiPost('/api/files/delete', { id });
+  if (!data) return;
+  if (!data.success) { toast(data.error, true); return; }
+  toast(data.message); loadStoredFiles();
 }
 
 // ── Bot Texts (✏️ Texts tab) ──
