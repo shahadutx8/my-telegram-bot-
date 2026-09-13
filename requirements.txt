@@ -17,3 +17,11 @@ psycopg2-binary
 pyTelegramBotAPI
 sift-stack-py
 werkzeug
+Faker
+Flask
+google-genai
+google-generativeai
+psycopg2-binary
+pyTelegramBotAPI
+sift-stack-py
+werkzeug

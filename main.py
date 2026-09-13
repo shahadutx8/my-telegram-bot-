@@ -510,6 +510,52 @@ bot_thread = None
 bot_lock = Lock()
 bot_status = {"running": False, "token_preview": "", "error": ""}
 
+# Telegram content protection is enabled for every message sent by this bot.
+# This prevents users from forwarding or saving bot messages and media.
+class ProtectedTeleBot(telebot.TeleBot):
+    """TeleBot that always marks outgoing content as protected."""
+
+    @staticmethod
+    def _protected_kwargs(kwargs):
+        kwargs["protect_content"] = True
+        return kwargs
+
+    def send_message(self, *args, **kwargs):
+        return super().send_message(*args, **self._protected_kwargs(kwargs))
+
+    def reply_to(self, *args, **kwargs):
+        return super().reply_to(*args, **self._protected_kwargs(kwargs))
+
+    def send_document(self, *args, **kwargs):
+        return super().send_document(*args, **self._protected_kwargs(kwargs))
+
+    def send_photo(self, *args, **kwargs):
+        return super().send_photo(*args, **self._protected_kwargs(kwargs))
+
+    def send_video(self, *args, **kwargs):
+        return super().send_video(*args, **self._protected_kwargs(kwargs))
+
+    def send_audio(self, *args, **kwargs):
+        return super().send_audio(*args, **self._protected_kwargs(kwargs))
+
+    def send_voice(self, *args, **kwargs):
+        return super().send_voice(*args, **self._protected_kwargs(kwargs))
+
+    def send_animation(self, *args, **kwargs):
+        return super().send_animation(*args, **self._protected_kwargs(kwargs))
+
+    def send_sticker(self, *args, **kwargs):
+        return super().send_sticker(*args, **self._protected_kwargs(kwargs))
+
+    def send_video_note(self, *args, **kwargs):
+        return super().send_video_note(*args, **self._protected_kwargs(kwargs))
+
+    def send_media_group(self, *args, **kwargs):
+        return super().send_media_group(*args, **self._protected_kwargs(kwargs))
+
+    def copy_message(self, *args, **kwargs):
+        return super().copy_message(*args, **self._protected_kwargs(kwargs))
+
 # Admin ID and developer name are now stored in config.json and managed via the dashboard.
 
 def make_bot(token: str):
@@ -518,7 +564,7 @@ def make_bot(token: str):
     if not token:
         return None, "No token provided."
     try:
-        b = telebot.TeleBot(token)
+        b = ProtectedTeleBot(token)
         b.get_me()          # synchronous API call — raises if token is invalid
         register_handlers(b)
         return b, ""
