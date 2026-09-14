@@ -510,79 +510,20 @@ bot_thread = None
 bot_lock = Lock()
 bot_status = {"running": False, "token_preview": "", "error": ""}
 
-# Telegram content protection is enabled for media sent by this bot.
-# Text remains copyable, while files and other media cannot be forwarded or saved.
+# Telegram content protection is enabled for every message and media sent by this bot.
 class ProtectedTeleBot(telebot.TeleBot):
-    """Protect outgoing content and provide an explicit copy button for text."""
+    """TeleBot that always marks outgoing content as protected."""
 
     @staticmethod
     def _protected_kwargs(kwargs):
         kwargs["protect_content"] = True
         return kwargs
 
-    @staticmethod
-    def _copy_markup(text: str):
-        """Build Telegram's official Copy Text buttons, in <=256-char chunks."""
-        text = str(text or "")
-        markup = telebot.types.InlineKeyboardMarkup()
-        chunks = [text[i:i + 256] for i in range(0, len(text), 256)] or [""]
-        multiple = len(chunks) > 1
-        for index, chunk in enumerate(chunks, 1):
-            label = f"📋 Copy text {index}" if multiple else "📋 Copy text"
-            markup.add(
-                telebot.types.InlineKeyboardButton(
-                    label,
-                    copy_text=telebot.types.CopyTextButton(text=chunk),
-                )
-            )
-        return markup
-
-    @classmethod
-    def _prepare_text_markup(cls, kwargs, text: str):
-        """Add copy buttons and report whether a reply-keyboard needs a companion."""
-        existing = kwargs.get("reply_markup")
-        if existing is None:
-            kwargs["reply_markup"] = cls._copy_markup(text)
-            return False
-        if isinstance(existing, telebot.types.InlineKeyboardMarkup):
-            copy_markup = cls._copy_markup(text)
-            for row in copy_markup.keyboard:
-                existing.keyboard.append(row)
-            return False
-        # Telegram cannot combine an inline Copy Text button with a reply keyboard.
-        return True
-
-    @staticmethod
-    def _chat_id_from_args(args, kwargs):
-        return args[0] if args else kwargs.get("chat_id")
-
     def send_message(self, *args, **kwargs):
-        text = args[1] if len(args) > 1 else kwargs.get("text", "")
-        companion = self._prepare_text_markup(kwargs, text)
-        result = super().send_message(*args, **self._protected_kwargs(kwargs))
-        if companion:
-            chat_id = self._chat_id_from_args(args, kwargs)
-            super().send_message(
-                chat_id,
-                "📋 Text copy করতে নিচের বাটনে চাপুন:",
-                reply_markup=self._copy_markup(text),
-                protect_content=True,
-            )
-        return result
+        return super().send_message(*args, **self._protected_kwargs(kwargs))
 
     def reply_to(self, *args, **kwargs):
-        message = args[0] if args else kwargs.get("message")
-        text = args[1] if len(args) > 1 else kwargs.get("text", "")
-        companion = self._prepare_text_markup(kwargs, text)
-        result = super().reply_to(*args, **self._protected_kwargs(kwargs))
-        if companion and message is not None:
-            super().send_message(
-                message.chat.id,
-                "📋 Text copy করতে নিচের বাটনে চাপুন:",
-                reply_markup=self._copy_markup(text),
-                protect_content=True,
-            )
-        return result
+        return super().reply_to(*args, **self._protected_kwargs(kwargs))
 
     def send_document(self, *args, **kwargs):
         return super().send_document(*args, **self._protected_kwargs(kwargs))
