@@ -510,21 +510,15 @@ bot_thread = None
 bot_lock = Lock()
 bot_status = {"running": False, "token_preview": "", "error": ""}
 
-# Telegram content protection is enabled for every message sent by this bot.
-# This prevents users from forwarding or saving bot messages and media.
+# Telegram content protection is enabled for media sent by this bot.
+# Text remains copyable, while files and other media cannot be forwarded or saved.
 class ProtectedTeleBot(telebot.TeleBot):
-    """TeleBot that always marks outgoing content as protected."""
+    """TeleBot that protects outgoing media while keeping text copyable."""
 
     @staticmethod
     def _protected_kwargs(kwargs):
         kwargs["protect_content"] = True
         return kwargs
-
-    def send_message(self, *args, **kwargs):
-        return super().send_message(*args, **self._protected_kwargs(kwargs))
-
-    def reply_to(self, *args, **kwargs):
-        return super().reply_to(*args, **self._protected_kwargs(kwargs))
 
     def send_document(self, *args, **kwargs):
         return super().send_document(*args, **self._protected_kwargs(kwargs))
@@ -552,9 +546,6 @@ class ProtectedTeleBot(telebot.TeleBot):
 
     def send_media_group(self, *args, **kwargs):
         return super().send_media_group(*args, **self._protected_kwargs(kwargs))
-
-    def copy_message(self, *args, **kwargs):
-        return super().copy_message(*args, **self._protected_kwargs(kwargs))
 
 # Admin ID and developer name are now stored in config.json and managed via the dashboard.
 
