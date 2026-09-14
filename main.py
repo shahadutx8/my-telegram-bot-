@@ -166,6 +166,28 @@ FIELD_EMOJI = {
     'username':    '🔗',
 }
 
+PROFILE_COPY_KEYS = ('full_name', 'google', 'email', 'mobile', 'username')
+
+def build_profile_copy_keyboard(profile: dict, enabled_fields) -> object | None:
+    """Return one protected Copy Text button for each useful profile field."""
+    enabled = set(enabled_fields or FIELD_KEYS)
+    buttons = []
+    for key in PROFILE_COPY_KEYS:
+        value = str(profile.get(key, '') or '').strip()
+        if key not in enabled or not value:
+            continue
+        buttons.append(
+            telebot.types.InlineKeyboardButton(
+                f"📋 {FIELD_LABELS[key]}",
+                copy_text=telebot.types.CopyTextButton(text=value[:256]),
+            )
+        )
+    if not buttons:
+        return None
+    keyboard = telebot.types.InlineKeyboardMarkup(row_width=2)
+    keyboard.add(*buttons)
+    return keyboard
+
 # Minimal emergency fallback — used only when names_default.json is missing or corrupt.
 _EMERGENCY_DEFAULTS: dict = {
     "bd_first_names": ["Md"],
@@ -312,7 +334,7 @@ DEFAULT_BOT_TEXTS = {
         "━━━━━━━━━━━━━━━━━━━━\n"
         "{field_lines}"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        "💡 টেক্সটে ট্যাপ করলেই অটো-কপি হয়ে যাবে।"
+        "💡 নিচের field button চাপলে শুধু ওই তথ্য কপি হবে।"
     ),
     # regular profile reply
     "unknown_country": (
@@ -327,7 +349,7 @@ DEFAULT_BOT_TEXTS = {
         "━━━━━━━━━━━━━━━━━━━━\n"
         "{field_lines}"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        "💡 তথ্যের ওপর ট্যাপ করলেই অটো-কপি হয়ে যাবে।"
+        "💡 নিচের field button চাপলে শুধু ওই তথ্য কপি হবে।"
     ),
     "profile_failed":     "⚠️ দুঃখিত, প্রোফাইল ডাটা জেনারেট করা সম্ভব হয়নি।",
     # admin notification — bot crashed
@@ -1191,6 +1213,7 @@ def register_handlers(b: telebot.TeleBot):
                     field_lines=field_lines,
                 ),
                 parse_mode="Markdown",
+                reply_markup=build_profile_copy_keyboard(profile, enabled),
             )
         except Exception:
             b.send_message(chat_id, get_text("profile_failed"))
@@ -1259,6 +1282,7 @@ def register_handlers(b: telebot.TeleBot):
                     field_lines=field_lines,
                 ),
                 parse_mode="Markdown",
+                reply_markup=build_profile_copy_keyboard(profile, enabled),
             )
 
         Thread(target=_do_ainame, daemon=True).start()
@@ -1668,7 +1692,8 @@ def register_handlers(b: telebot.TeleBot):
                 f"{field_lines}"
                 f"━━━━━━━━━━━━━━━━━━━━\n"
                 f"_(লগ বা হিস্ট্রিতে সেভ হয়নি)_",
-                parse_mode="Markdown"
+                parse_mode="Markdown",
+                reply_markup=build_profile_copy_keyboard(profile, enabled),
             )
         except Exception:
             b.reply_to(message, "⚠️ প্রোফাইল তৈরি করা সম্ভব হয়নি।")
@@ -1800,7 +1825,8 @@ def register_handlers(b: telebot.TeleBot):
                     dev_line=dev_line, tg_mention=tg_mention,
                     country=country_input.capitalize(), field_lines=field_lines,
                 ),
-                parse_mode="Markdown"
+                parse_mode="Markdown",
+                reply_markup=build_profile_copy_keyboard(profile, enabled),
             )
         except Exception:
             b.reply_to(message, get_text("profile_failed"))
