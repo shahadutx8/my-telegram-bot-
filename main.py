@@ -209,6 +209,26 @@ DEFAULT_BOT_TEXTS = {
         "🆔 ID: `{user_id}`\n"
         "📊 মোট ইউজার: {total_users}"
     ),
+    "pending_user_notify": (
+        "⏳ *নতুন ইউজার Pending অবস্থায় আছে!*\n\n"
+        "👤 নাম: {fullname}\n"
+        "🔗 Username: {uname}\n"
+        "🆔 ID: `{user_id}`\n"
+        "✅ অনুমতি দিতে: `/approve {user_id}`\n"
+        "🚫 Reject করতে: `/reject {user_id} [কারণ]`"
+    ),
+    "access_pending": (
+        "⏳ আপনার bot access এখনো *Pending* আছে।\n\n"
+        "অ্যাডমিন অনুমোদন দিলে আপনি bot ব্যবহার করতে পারবেন।"
+    ),
+    "access_rejected": (
+        "🚫 আপনার bot access *Rejected* করা হয়েছে।\n"
+        "কারণ: {reason}"
+    ),
+    "access_approved": (
+        "✅ আপনার bot access *Approved* হয়েছে।\n\n"
+        "এখন যেকোনো দেশের নাম লিখে profile generate করতে পারবেন।"
+    ),
     # /panel (admin)
     "panel_reply": (
         "⚙️ কন্ট্রোল প্যানেল:\n\n"
@@ -653,17 +673,57 @@ def track_user(user_id: int, username: str | None, first_name: str | None, incre
     with users_lock:
         is_new = user_id not in KNOWN_USERS
         existing = KNOWN_USERS.get(user_id, {})
+        # New users must be approved by the admin. Existing records from before
+        # this workflow are treated as approved for backward compatibility.
+        access_status = (
+            "approved" if user_id == get_admin_id()
+            else ("pending" if is_new else existing.get("approval_status", "approved"))
+        )
+        if access_status not in {"pending", "approved", "rejected"}:
+            access_status = "approved"
         KNOWN_USERS[user_id] = {
             "username":      username or existing.get("username", ""),
             "first_name":    first_name or existing.get("first_name", ""),
             "last_seen":     now,
             "profile_count": existing.get("profile_count", 0) + (1 if increment_count else 0),
+            "approval_status": access_status,
+            "approval_reason": existing.get("approval_reason", ""),
+            "approval_updated_at": existing.get("approval_updated_at", ""),
             # Any new message starts a fresh inactivity period.
             "inactivity_warning_sent": False,
             "inactivity_admin_alerted": False,
         }
         save_users(KNOWN_USERS)
     return is_new
+
+def get_user_access_status(user_id: int, info: dict | None = None) -> str:
+    """Return a normalized access status; legacy users remain approved."""
+    if user_id == get_admin_id():
+        return "approved"
+    info = info if info is not None else KNOWN_USERS.get(user_id, {})
+    status = info.get("approval_status", "approved")
+    return status if status in {"pending", "approved", "rejected"} else "approved"
+
+def set_user_access_status(user_id: int, status: str, reason: str = "") -> dict | None:
+    """Persist a user's approval state and return a snapshot of the user."""
+    if status not in {"pending", "approved", "rejected"}:
+        raise ValueError(f"Invalid access status: {status}")
+    now = _dt.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    with users_lock:
+        info = KNOWN_USERS.get(user_id)
+        if info is None:
+            return None
+        info["approval_status"] = status
+        info["approval_reason"] = reason if status == "rejected" else ""
+        info["approval_updated_at"] = now
+        if status == "approved":
+            # Approval starts a fresh activity cycle; do not immediately mark
+            # a newly approved user inactive based on their pending wait time.
+            info["last_seen"] = now
+            info["inactivity_warning_sent"] = False
+            info["inactivity_admin_alerted"] = False
+        save_users(KNOWN_USERS)
+        return dict(info)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Admin Notifications
@@ -730,7 +790,7 @@ def _run_inactivity_monitor():
 
     for user_id, info in snapshot:
         # Banned users already receive a ban response; do not send reminders.
-        if is_banned(user_id):
+        if is_banned(user_id) or get_user_access_status(user_id, info) != "approved":
             continue
         days = _inactive_days(info.get("last_seen", ""), now)
         if days is None:
@@ -941,9 +1001,48 @@ def register_handlers(b: telebot.TeleBot):
     def _get_enabled_fields():
         return CONFIG.get("bot_reply_fields", FIELD_KEYS)
 
+    def _access_allowed(message) -> bool:
+        """Gate regular bot features behind the admin-controlled access state."""
+        user_id = message.from_user.id
+        if user_id == get_admin_id():
+            return True
+        if is_banned(user_id):
+            b.reply_to(message, get_text("banned_reply"))
+            return False
+        info = KNOWN_USERS.get(user_id, {})
+        status = get_user_access_status(user_id, info)
+        if status == "pending":
+            b.reply_to(message, get_text("access_pending"))
+            return False
+        if status == "rejected":
+            reason = info.get("approval_reason") or "অ্যাডমিনের সিদ্ধান্ত"
+            b.reply_to(message, get_text("access_rejected", reason=reason))
+            return False
+        return True
+
+    def _notify_new_user(message):
+        user = message.from_user
+        uname = f"@{user.username}" if user.username else "N/A"
+        fullname = f"{user.first_name or ''} {user.last_name or ''}".strip() or "N/A"
+        status = get_user_access_status(user.id)
+        text_key = "pending_user_notify" if status == "pending" else "new_user_notify"
+        Thread(target=notify_admin, args=(
+            get_text(
+                text_key,
+                fullname=fullname,
+                uname=uname,
+                user_id=user.id,
+                total_users=f"{len(KNOWN_USERS):,}",
+            ),
+        ), daemon=True).start()
+
     @b.message_handler(commands=['start'])
     def send_welcome(message):
         is_new = track_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
+        if not _access_allowed(message):
+            if is_new:
+                _notify_new_user(message)
+            return
         used_count   = len(USED_NAMES)
         remaining    = get_total_combinations() - used_count
         country_keys = ", ".join(k.capitalize() for k in get_country_details().keys())
@@ -953,14 +1052,7 @@ def register_handlers(b: telebot.TeleBot):
             remaining=f"{remaining:,}",
         ))
         if is_new:
-            user = message.from_user
-            uname    = f"@{user.username}" if user.username else "N/A"
-            fullname = f"{user.first_name or ''} {user.last_name or ''}".strip() or "N/A"
-            Thread(target=notify_admin, args=(
-                get_text("new_user_notify",
-                    fullname=fullname, uname=uname,
-                    user_id=user.id, total_users=f"{len(KNOWN_USERS):,}"),
-            ), daemon=True).start()
+            _notify_new_user(message)
 
     @b.message_handler(commands=['panel'])
     def admin_panel(message):
@@ -991,6 +1083,8 @@ def register_handlers(b: telebot.TeleBot):
     @b.message_handler(commands=['history'])
     def send_history(message):
         track_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
+        if not _access_allowed(message):
+            return
         with user_profiles_lock:
             history = list(USER_PROFILES.get(message.from_user.id, []))
         if not history:
@@ -1012,8 +1106,7 @@ def register_handlers(b: telebot.TeleBot):
     def send_ai_name(message):
         track_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
 
-        if is_banned(message.from_user.id):
-            b.reply_to(message, get_text("banned_reply"))
+        if not _access_allowed(message):
             return
 
         if not _GEMINI_KEY:
@@ -1106,6 +1199,12 @@ def register_handlers(b: telebot.TeleBot):
             "• /users — ইউজার লিস্ট\n"
             "• /usage — কোন user কোন নাম কখন ব্যবহার করেছে\n"
             "• /inactive — ২+ দিন inactive ইউজার\n\n"
+            "🔐 *ইউজার Access Control*\n"
+            "• /pending — Pending ইউজার\n"
+            "• /approve `<id>` — Bot access দিন\n"
+            "• /reject `<id>` [কারণ] — Bot access বন্ধ করুন\n"
+            "• /approved — Approved ইউজার\n"
+            "• /rejected — Rejected ইউজার\n\n"
             "🚫 *ব্যান ম্যানেজমেন্ট*\n"
             "• /banned — ব্যানড লিস্ট\n"
             "• /ban `<id>` [কারণ] — ব্যান করুন\n"
@@ -1123,6 +1222,94 @@ def register_handlers(b: telebot.TeleBot):
             "🛑 *বট স্টপ*\n"
             "• /stopbot — পোলিং বন্ধ করুন",
             parse_mode="Markdown"
+        )
+
+    @b.message_handler(commands=['pending', 'approved', 'rejected'])
+    def access_users_list(message):
+        if not _admin_only(message): return
+        requested = message.text.strip().split()[0].split("@")[0].lstrip("/").lower()
+        status = requested if requested in {"pending", "approved", "rejected"} else "pending"
+        labels = {
+            "pending": "⏳ Pending",
+            "approved": "✅ Approved",
+            "rejected": "🚫 Rejected",
+        }
+        with users_lock:
+            rows = [
+                (uid, dict(info))
+                for uid, info in KNOWN_USERS.items()
+                if get_user_access_status(uid, info) == status
+            ]
+        rows.sort(key=lambda item: item[1].get("last_seen", ""), reverse=True)
+        if not rows:
+            b.reply_to(message, f"✅ বর্তমানে কোনো {labels[status]} ইউজার নেই।")
+            return
+        lines = [f"{labels[status]} *ইউজার* — মোট {len(rows):,}\n"]
+        for uid, info in rows[:50]:
+            username = f"@{info.get('username')}" if info.get("username") else "N/A"
+            name = info.get("first_name") or "N/A"
+            last_seen = info.get("last_seen") or "N/A"
+            lines.append(
+                f"👤 {name} {username}\n"
+                f"🆔 `{uid}` | 🕒 `{last_seen}`"
+            )
+            if status == "pending":
+                lines.append(f"   ✅ /approve {uid}  🚫 /reject {uid}")
+            elif status == "rejected" and info.get("approval_reason"):
+                lines.append(f"   কারণ: {info['approval_reason']}")
+        if len(rows) > 50:
+            lines.append(f"\n…আরও {len(rows) - 50} জন")
+        b.reply_to(message, "\n".join(lines), parse_mode="Markdown")
+
+    @b.message_handler(commands=['approve'])
+    def approve_user_cmd(message):
+        if not _admin_only(message): return
+        parts = message.text.strip().split()
+        if len(parts) < 2 or not parts[1].lstrip("-").isdigit():
+            b.reply_to(message, "⚠️ ব্যবহার: /approve `<user_id>`", parse_mode="Markdown")
+            return
+        user_id = int(parts[1])
+        if user_id == get_admin_id():
+            b.reply_to(message, "ℹ️ Admin-এর access আগে থেকেই Approved।")
+            return
+        info = set_user_access_status(user_id, "approved")
+        if info is None:
+            b.reply_to(message, f"❌ User `{user_id}` পাওয়া যায়নি।", parse_mode="Markdown")
+            return
+        try:
+            b.send_message(user_id, get_text("access_approved"))
+        except Exception as e:
+            print(f"[Access] approved notification failed for {user_id}: {e}")
+        b.reply_to(
+            message,
+            f"✅ User `{user_id}` এখন *Approved*। Bot ব্যবহার করতে পারবে।",
+            parse_mode="Markdown",
+        )
+
+    @b.message_handler(commands=['reject'])
+    def reject_user_cmd(message):
+        if not _admin_only(message): return
+        parts = message.text.strip().split(maxsplit=2)
+        if len(parts) < 2 or not parts[1].lstrip("-").isdigit():
+            b.reply_to(message, "⚠️ ব্যবহার: /reject `<user_id>` [কারণ]", parse_mode="Markdown")
+            return
+        user_id = int(parts[1])
+        if user_id == get_admin_id():
+            b.reply_to(message, "❌ নিজের admin access Reject করা যাবে না।")
+            return
+        reason = parts[2].strip() if len(parts) > 2 else "অ্যাডমিনের সিদ্ধান্ত"
+        info = set_user_access_status(user_id, "rejected", reason)
+        if info is None:
+            b.reply_to(message, f"❌ User `{user_id}` পাওয়া যায়নি।", parse_mode="Markdown")
+            return
+        try:
+            b.send_message(user_id, get_text("access_rejected", reason=reason))
+        except Exception as e:
+            print(f"[Access] rejected notification failed for {user_id}: {e}")
+        b.reply_to(
+            message,
+            f"🚫 User `{user_id}` এখন *Rejected*। Bot ব্যবহার করতে পারবে না।\nকারণ: {reason}",
+            parse_mode="Markdown",
         )
 
     @b.message_handler(commands=['stats'])
@@ -1163,7 +1350,8 @@ def register_handlers(b: telebot.TeleBot):
             uname = f"@{info['username']}" if info.get("username") else "—"
             name  = info.get("first_name") or "—"
             count = info.get("profile_count", 0)
-            lines.append(f"{rank}. {name} {uname}\n   🆔 `{uid}` | 📋 {count} profiles")
+            status = get_user_access_status(uid, info).capitalize()
+            lines.append(f"{rank}. {name} {uname}\n   🆔 `{uid}` | 📋 {count} profiles | {status}")
         if page < total_pages:
             lines.append(f"\n➡️ পরের পেজ: /users {page + 1}")
         b.reply_to(message, "\n".join(lines), parse_mode="Markdown")
@@ -1421,17 +1609,9 @@ def register_handlers(b: telebot.TeleBot):
     def handle_all_messages(message):
         is_new = track_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
         if is_new:
-            user = message.from_user
-            uname    = f"@{user.username}" if user.username else "N/A"
-            fullname = f"{user.first_name or ''} {user.last_name or ''}".strip() or "N/A"
-            Thread(target=notify_admin, args=(
-                get_text("new_user_notify",
-                    fullname=fullname, uname=uname,
-                    user_id=user.id, total_users=f"{len(KNOWN_USERS):,}"),
-            ), daemon=True).start()
+            _notify_new_user(message)
 
-        if is_banned(message.from_user.id):
-            b.reply_to(message, get_text("banned_reply"))
+        if not _access_allowed(message):
             return
 
         if not message.text:
