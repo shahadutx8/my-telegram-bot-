@@ -254,6 +254,23 @@ DEFAULT_BOT_TEXTS = {
         "📋 /history — আগের প্রোফাইল দেখুন\n"
         "🤖 /ainame [দেশ] — AI দিয়ে real-style নাম তৈরি করুন"
     ),
+    "button_generate_prompt": "⚡ Profile তৈরি করতে একটি দেশের নাম লিখুন:\n{country_keys}",
+    "button_ai_prompt": "🤖 AI name-এর জন্য `/ainame <দেশ>` লিখুন। উদাহরণ: `/ainame Bangladesh`",
+    "button_help": (
+        "❓ *Help*\n\n"
+        "⚡ Profile: একটি দেশের নাম লিখুন\n"
+        "🤖 AI Name: `/ainame <দেশ>`\n"
+        "📋 History: `/history`\n"
+        "📂 Files: `/files` অথবা `/download <command>`"
+    ),
+    "approval_pending": "⏳ আপনার account approval-এর অপেক্ষায় আছে। Admin approve করলে bot ব্যবহার করতে পারবেন।",
+    "approval_rejected": "❌ আপনার account reject করা হয়েছে। Admin-এর সঙ্গে যোগাযোগ করুন।",
+    "pending_user_notify": (
+        "🆕 *নতুন ইউজার approval-এর অপেক্ষায়*\n\n"
+        "👤 নাম: {fullname}\n"
+        "🔗 Username: {uname}\n"
+        "🆔 ID: `{user_id}`"
+    ),
     # admin notification — new user joined
     "new_user_notify": (
         "🆕 *নতুন ইউজার জয়েন করেছে!*\n\n"
@@ -719,9 +736,9 @@ def get_user_status(user_id: int) -> str:
 def user_access_message(user_id: int) -> str:
     status = get_user_status(user_id)
     if status == "pending":
-        return "⏳ আপনার account approval-এর অপেক্ষায় আছে। Admin approve করলে bot ব্যবহার করতে পারবেন।"
+        return get_text("approval_pending")
     if status == "rejected":
-        return "❌ আপনার account reject করা হয়েছে। Admin-এর সঙ্গে যোগাযোগ করুন।"
+        return get_text("approval_rejected")
     return ""
 
 def user_is_approved(user_id: int) -> bool:
@@ -733,6 +750,13 @@ def require_user_approval(bot_instance, message) -> bool:
         bot_instance.reply_to(message, notice)
         return False
     return True
+
+def build_main_reply_keyboard():
+    keyboard = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
+    keyboard.row("⚡ Generate Profile", "🤖 AI Name")
+    keyboard.row("📋 My History", "📂 Files")
+    keyboard.row("❓ Help")
+    return keyboard
 
 def track_user(user_id: int, username: str | None, first_name: str | None, increment_count: bool = False) -> bool:
     """Upsert user into registry. Thread-safe. Returns True if this is a brand-new user."""
@@ -1131,19 +1155,27 @@ def register_handlers(b: telebot.TeleBot):
             if is_new:
                 user = message.from_user
                 Thread(target=notify_admin, args=(
-                    f"🆕 নতুন user approval-এর অপেক্ষায়\n"
-                    f"নাম: {user.first_name or 'N/A'}\n"
-                    f"User ID: {user.id}",
+                    get_text(
+                        "pending_user_notify",
+                        fullname=user.first_name or "N/A",
+                        uname=f"@{user.username}" if user.username else "N/A",
+                        user_id=user.id,
+                    ),
                 ), daemon=True).start()
             return
         used_count   = len(USED_NAMES)
         remaining    = get_total_combinations() - used_count
         country_keys = ", ".join(k.capitalize() for k in get_country_details().keys())
-        b.reply_to(message, get_text("welcome",
-            country_keys=country_keys,
-            used_count=f"{used_count:,}",
-            remaining=f"{remaining:,}",
-        ))
+        b.reply_to(
+            message,
+            get_text(
+                "welcome",
+                country_keys=country_keys,
+                used_count=f"{used_count:,}",
+                remaining=f"{remaining:,}",
+            ),
+            reply_markup=build_main_reply_keyboard(),
+        )
         if is_new:
             user = message.from_user
             uname    = f"@{user.username}" if user.username else "N/A"
@@ -1265,7 +1297,7 @@ def register_handlers(b: telebot.TeleBot):
             b.reply_to(message, f"⚠️ {error}")
 
     @b.message_handler(commands=['ainame'])
-    def send_ai_name(message):
+    def send_ai_name(message, country_override=None):
         track_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
         if not require_user_approval(b, message):
             return
@@ -1279,7 +1311,7 @@ def register_handlers(b: telebot.TeleBot):
             return
 
         parts       = message.text.strip().split(maxsplit=1)
-        country_arg = parts[1].strip().lower() if len(parts) > 1 else "bangladesh"
+        country_arg = country_override or (parts[1].strip().lower() if len(parts) > 1 else "bangladesh")
 
         country_details = get_country_details()
         if country_arg not in country_details:
@@ -1691,6 +1723,24 @@ def register_handlers(b: telebot.TeleBot):
             return
 
         if not message.text:
+            return
+
+        button_action = re.sub(r"\s+", " ", message.text.strip()).casefold()
+        if button_action in {"⚡ generate profile", "generate profile"}:
+            country_keys = ", ".join(k.capitalize() for k in get_country_details().keys())
+            b.reply_to(message, get_text("button_generate_prompt", country_keys=country_keys))
+            return
+        if button_action in {"🤖 ai name", "ai name"}:
+            send_ai_name(message, "bangladesh")
+            return
+        if button_action in {"📋 my history", "my history"}:
+            send_history(message)
+            return
+        if button_action in {"📂 files", "files"}:
+            list_downloadable_files(message)
+            return
+        if button_action in {"❓ help", "help"}:
+            b.reply_to(message, get_text("button_help"), parse_mode="Markdown")
             return
 
         country_input   = message.text.strip().lower()
