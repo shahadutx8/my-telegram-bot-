@@ -820,7 +820,7 @@
       <h2>📂 ইউজারদের জন্য ফাইল সংরক্ষণ</h2>
       <p style="font-size:13px;color:#aaa;margin-bottom:18px;">
         এখানে ফাইল আপলোড করলে ইউজার <code style="color:#c4b5fd;">/download কমান্ড</code> দিয়ে সেটি পাবে।
-        সর্বোচ্চ ফাইল সাইজ 50 MB।
+        অথবা private channel-এর message থেকে সরাসরি পাঠাতে পারবেন।
       </p>
       <div class="settings-grid" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr));">
         <div class="form-group">
@@ -868,10 +868,34 @@
         একই command থাকলে পুরনো ফাইল replace/update করুন
       </label>
       <div class="form-group">
+        <label>Delivery Source *</label>
+        <select id="file-source" class="names-input" onchange="toggleFileSource()">
+          <option value="upload">Dashboard থেকে file upload (সর্বোচ্চ 50 MB)</option>
+          <option value="channel">Private Telegram channel message</option>
+        </select>
+      </div>
+      <div id="channel-source-wrap" style="display:none;padding:13px 15px;margin-bottom:14px;border:1px solid rgba(167,139,250,.3);border-radius:10px;background:rgba(124,99,245,.07);">
+        <div style="font-size:12px;color:#c4b5fd;margin-bottom:10px;">
+          ℹ️ Bot-কে private channel-এ member/admin করুন। Protected channel content copy করা যাবে না।
+        </div>
+        <div class="settings-grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));">
+          <div class="form-group" style="margin:0;">
+            <label>Private Channel ID *</label>
+            <input type="text" id="file-channel-id" placeholder="-1001234567890" class="names-input"/>
+            <div style="margin-top:5px;font-size:11px;color:#777;">সাধারণত -100 দিয়ে শুরু হয়</div>
+          </div>
+          <div class="form-group" style="margin:0;">
+            <label>Message ID *</label>
+            <input type="number" id="file-message-id" placeholder="যেমন: 123" min="1" class="names-input"/>
+            <div style="margin-top:5px;font-size:11px;color:#777;">Channel post-এর message ID</div>
+          </div>
+        </div>
+      </div>
+      <div class="form-group" id="uploaded-file-wrap">
         <label>ফাইল *</label>
         <input type="file" id="stored-file" style="width:100%;padding:10px;border-radius:9px;background:rgba(255,255,255,.07);color:#ddd;border:1px solid rgba(255,255,255,.15);"/>
       </div>
-      <button class="btn btn-purple" onclick="uploadStoredFile()" id="file-upload-btn">📤 ফাইল সেভ করুন</button>
+      <button class="btn btn-purple" onclick="saveStoredFile()" id="file-upload-btn">📤 ফাইল সেভ করুন</button>
       <div class="form-msg" id="file-msg"></div>
     </div>
     <div class="section">
@@ -2119,6 +2143,14 @@ function toggleFileAccess() {
   document.getElementById('file-allowed-wrap').style.display = mode === 'selected' ? '' : 'none';
 }
 
+function toggleFileSource() {
+  const source = document.getElementById('file-source').value;
+  document.getElementById('channel-source-wrap').style.display = source === 'channel' ? '' : 'none';
+  document.getElementById('uploaded-file-wrap').style.display = source === 'upload' ? '' : 'none';
+  const btn = document.getElementById('file-upload-btn');
+  btn.textContent = source === 'channel' ? '🔗 Channel file সেভ করুন' : '📤 ফাইল সেভ করুন';
+}
+
 async function loadStoredFiles() {
   try {
     const res = await fetch('/api/files');
@@ -2144,10 +2176,14 @@ function renderStoredFiles(files) {
   }
   el.innerHTML = files.map(f => `
     <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:13px 0;border-bottom:1px solid rgba(255,255,255,.07);">
-      <div style="font-size:25px;">📄</div>
+      <div style="font-size:25px;">${f.storage === 'telegram_channel' ? '🔗' : '📄'}</div>
       <div style="flex:1;min-width:200px;">
         <div style="font-weight:700;color:#e0d7ff;">${escHtml(f.title)}</div>
-        <div style="font-size:12px;color:#999;margin-top:4px;">${escHtml(f.filename)} · ${formatFileSize(f.size)}</div>
+        <div style="font-size:12px;color:#999;margin-top:4px;">
+          ${f.storage === 'telegram_channel'
+            ? `Private channel · message ${escHtml(String(f.source_message_id || ''))}`
+            : `${escHtml(f.filename)} · ${formatFileSize(f.size)}`}
+        </div>
         <div style="font-size:12px;color:#a78bfa;margin-top:3px;">/download ${escHtml(f.command)}
           · ${escHtml(f.category || 'General')}${f.version ? ` · v${escHtml(f.version)}` : ''}</div>
         <div style="font-size:12px;color:#4ade80;margin-top:3px;">
@@ -2160,7 +2196,7 @@ function renderStoredFiles(files) {
     </div>`).join('');
 }
 
-async function uploadStoredFile() {
+async function saveStoredFile() {
   const title = (document.getElementById('file-title').value || '').trim();
   const command = (document.getElementById('file-command').value || '').trim().toLowerCase().replace(/^\//, '');
   const caption = (document.getElementById('file-caption').value || '').trim();
@@ -2170,14 +2206,22 @@ async function uploadStoredFile() {
   const allowed = (document.getElementById('file-allowed').value || '').trim();
   const expiry = (document.getElementById('file-expiry').value || '').trim();
   const replace = document.getElementById('file-replace').checked;
+  const source = document.getElementById('file-source').value;
   const input = document.getElementById('stored-file');
   if (!title) { showMsg('file-msg', 'ফাইলের নাম দিন।', true); return; }
   if (!/^[a-z][a-z0-9_]{1,31}$/.test(command)) {
     showMsg('file-msg', 'কমান্ড 2–32 অক্ষরের ইংরেজি ছোট হাতের অক্ষর, সংখ্যা বা _ হতে হবে।', true); return;
   }
   if (access === 'selected' && !allowed) { showMsg('file-msg', 'Allowed User ID দিন।', true); return; }
-  if (!input.files.length) { showMsg('file-msg', 'ফাইল সিলেক্ট করুন।', true); return; }
-  if (input.files[0].size > 50 * 1024 * 1024) { showMsg('file-msg', 'ফাইলের সর্বোচ্চ সাইজ 50 MB।', true); return; }
+  if (source === 'upload' && !input.files.length) { showMsg('file-msg', 'ফাইল সিলেক্ট করুন।', true); return; }
+  if (source === 'upload' && input.files[0].size > 50 * 1024 * 1024) { showMsg('file-msg', 'ফাইলের সর্বোচ্চ সাইজ 50 MB।', true); return; }
+  if (source === 'channel') {
+    const channelId = (document.getElementById('file-channel-id').value || '').trim();
+    const messageId = (document.getElementById('file-message-id').value || '').trim();
+    if (!channelId || !messageId) {
+      showMsg('file-msg', 'Private channel ID এবং Message ID দিন।', true); return;
+    }
+  }
   const btn = document.getElementById('file-upload-btn');
   btn.disabled = true; btn.textContent = 'সেভ হচ্ছে…';
   const fd = new FormData();
@@ -2185,9 +2229,17 @@ async function uploadStoredFile() {
   fd.append('caption', caption); fd.append('category', category);
   fd.append('version', version); fd.append('access_mode', access);
   fd.append('allowed_users', allowed); fd.append('expires_at', expiry);
-  fd.append('replace', replace ? '1' : '0'); fd.append('file', input.files[0]);
+  fd.append('replace', replace ? '1' : '0');
+  let endpoint = '/api/files/upload';
+  if (source === 'upload') {
+    fd.append('file', input.files[0]);
+  } else {
+    endpoint = '/api/files/channel';
+    fd.append('source_chat_id', document.getElementById('file-channel-id').value.trim());
+    fd.append('source_message_id', document.getElementById('file-message-id').value.trim());
+  }
   try {
-    const res = await fetch('/api/files/upload', { method:'POST', body:fd });
+    const res = await fetch(endpoint, { method:'POST', body:fd });
     const data = await res.json();
     showMsg('file-msg', data.message || data.error, !data.success);
     if (data.success) {
@@ -2196,7 +2248,10 @@ async function uploadStoredFile() {
       document.getElementById('file-category').value = ''; document.getElementById('file-version').value = '';
       document.getElementById('file-allowed').value = ''; document.getElementById('file-expiry').value = '';
       document.getElementById('file-replace').checked = false; document.getElementById('file-access').value = 'all';
-      toggleFileAccess();
+      document.getElementById('file-source').value = 'upload';
+      document.getElementById('file-channel-id').value = '';
+      document.getElementById('file-message-id').value = '';
+      toggleFileAccess(); toggleFileSource();
       input.value = ''; loadStoredFiles();
     }
   } catch { showMsg('file-msg', 'নেটওয়ার্ক ত্রুটি', true); }

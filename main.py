@@ -51,6 +51,13 @@ def _get_db():
                             value TEXT NOT NULL
                         )
                     """)
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS bot_file_blobs (
+                            key         TEXT PRIMARY KEY,
+                            data        BYTEA NOT NULL,
+                            updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                        )
+                    """)
         except Exception as e:
             print(f"[DB] connect error: {e}")
             _db_conn = None
@@ -574,6 +581,9 @@ class ProtectedTeleBot(telebot.TeleBot):
     def send_media_group(self, *args, **kwargs):
         return super().send_media_group(*args, **self._protected_kwargs(kwargs))
 
+    def copy_message(self, *args, **kwargs):
+        return super().copy_message(*args, **self._protected_kwargs(kwargs))
+
 # Admin ID and developer name are now stored in config.json and managed via the dashboard.
 
 def make_bot(token: str):
@@ -931,6 +941,37 @@ def record_file_download(item_id: str, user):
 def send_stored_file(bot_instance, chat_id: int, item: dict, user) -> tuple[bool, str]:
     if not file_is_available(item, user.id):
         return False, "এই ফাইলটি আপনার জন্য অনুমোদিত নয় অথবা এর মেয়াদ শেষ হয়েছে।"
+
+    if item.get("storage") == "telegram_channel":
+        source_chat_id = str(item.get("source_chat_id", "")).strip()
+        try:
+            source_message_id = int(item.get("source_message_id", 0))
+        except (TypeError, ValueError):
+            source_message_id = 0
+        if not source_chat_id or source_message_id <= 0:
+            return False, "Private channel file-এর source তথ্য অসম্পূর্ণ।"
+        try:
+            copy_kwargs = {"protect_content": True}
+            if item.get("caption"):
+                copy_kwargs["caption"] = item["caption"]
+            bot_instance.copy_message(
+                chat_id,
+                source_chat_id,
+                source_message_id,
+                **copy_kwargs,
+            )
+            record_file_download(item.get("id", ""), user)
+            return True, ""
+        except Exception as exc:
+            print(
+                f"[ChannelFile] source={source_chat_id}/{source_message_id} "
+                f"error: {exc}"
+            )
+            return False, (
+                "Private channel থেকে file পাঠানো যায়নি। "
+                "Bot-কে channel-এ member/admin করে channel ID ও message ID যাচাই করুন।"
+            )
+
     file_path = item.get("path", "")
     file_handle = None
     should_close = False
@@ -2615,6 +2656,9 @@ def api_files():
                 "last_downloads": item.get("last_downloads", [])[-5:],
                 "size": item.get("size", 0),
                 "created_at": item.get("created_at", ""),
+                "storage": item.get("storage", "disk"),
+                "source_chat_id": item.get("source_chat_id", ""),
+                "source_message_id": item.get("source_message_id", ""),
             }
             for item in STORED_FILES
         ]
@@ -2728,6 +2772,118 @@ def api_files_upload():
 
     action = "আপডেট" if existing_index is not None else "সেভ"
     return jsonify(success=True, message=f"✅ ফাইল {action} হয়েছে। ইউজার ব্যবহার করবে: /download {command}")
+
+@app.route('/api/files/channel', methods=['POST'])
+@login_required
+def api_files_channel():
+    """Register a file that will be copied from a private Telegram channel."""
+    title = request.form.get("title", "").strip()
+    command = request.form.get("command", "").strip().lstrip("/").lower()
+    caption = request.form.get("caption", "").strip()
+    category = request.form.get("category", "").strip()[:40] or "General"
+    version = request.form.get("version", "").strip()[:30]
+    access_mode = request.form.get("access_mode", "all").strip().lower()
+    allowed_raw = request.form.get("allowed_users", "").strip()
+    expires_at = request.form.get("expires_at", "").strip()
+    replace = request.form.get("replace", "").strip().lower() in {"1", "true", "yes", "on"}
+    source_chat_id = request.form.get("source_chat_id", "").strip()
+    source_message_id = request.form.get("source_message_id", "").strip()
+
+    if not title:
+        return jsonify(success=False, error="ফাইলের একটি নাম দিন।")
+    if not re.fullmatch(r"[a-z][a-z0-9_]{1,31}", command):
+        return jsonify(
+            success=False,
+            error="কমান্ড 2–32 অক্ষরের হতে হবে; শুধু ইংরেজি ছোট হাতের অক্ষর, সংখ্যা ও _ ব্যবহার করুন।",
+        )
+    if not source_chat_id:
+        return jsonify(success=False, error="Private channel ID দিন, যেমন -1001234567890।")
+    if not (
+        re.fullmatch(r"-?\d+", source_chat_id)
+        or re.fullmatch(r"@[A-Za-z0-9_]{5,}", source_chat_id)
+    ):
+        return jsonify(success=False, error="Channel ID -100... অথবা @channelusername আকারে দিন।")
+    try:
+        source_message_id = int(source_message_id)
+        if source_message_id <= 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        return jsonify(success=False, error="সঠিক private channel message ID দিন।")
+    if access_mode not in {"all", "selected"}:
+        return jsonify(success=False, error="Access mode সঠিক নয়।")
+    allowed_users = []
+    if access_mode == "selected":
+        try:
+            allowed_users = sorted({int(value.strip()) for value in allowed_raw.split(",") if value.strip()})
+        except ValueError:
+            return jsonify(success=False, error="Allowed User ID কমা দিয়ে সঠিকভাবে দিন।")
+        if not allowed_users:
+            return jsonify(success=False, error="Selected users access-এর জন্য অন্তত একটি User ID দিন।")
+    if expires_at:
+        try:
+            if _dt.fromisoformat(expires_at) <= _dt.now():
+                return jsonify(success=False, error="Expiry সময় ভবিষ্যতের হতে হবে।")
+        except ValueError:
+            return jsonify(success=False, error="Expiry সময় সঠিক নয়।")
+
+    with stored_files_lock:
+        existing_index = next(
+            (i for i, item in enumerate(STORED_FILES) if item.get("command") == command),
+            None,
+        )
+        if existing_index is not None and not replace:
+            return jsonify(success=False, error=f"/download {command} ইতিমধ্যে ব্যবহার করা হয়েছে।")
+
+        existing = STORED_FILES[existing_index] if existing_index is not None else {}
+        item = {
+            "id": existing.get("id") or secrets_module.token_hex(8),
+            "title": title,
+            "command": command,
+            "caption": caption,
+            "category": category,
+            "version": version,
+            "access_mode": access_mode,
+            "allowed_users": allowed_users,
+            "expires_at": expires_at,
+            "filename": f"channel-message-{source_message_id}",
+            "path": "",
+            "size": 0,
+            "created_at": _dt.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "downloads": int(existing.get("downloads", 0) or 0),
+            "last_downloads": existing.get("last_downloads", []),
+            "storage": "telegram_channel",
+            "source_chat_id": source_chat_id,
+            "source_message_id": source_message_id,
+        }
+        if existing_index is None:
+            STORED_FILES.append(item)
+        else:
+            STORED_FILES[existing_index] = item
+        try:
+            save_stored_files(STORED_FILES)
+        except OSError as exc:
+            if existing_index is None:
+                STORED_FILES.pop()
+            else:
+                STORED_FILES[existing_index] = existing
+            print(f"[ChannelFile] index save error: {exc}")
+            return jsonify(success=False, error="Private channel file-এর তথ্য সংরক্ষণ করা যায়নি।")
+
+        if existing_index is not None:
+            if existing.get("storage") == "database":
+                db_delete_blob(existing.get("id", ""))
+            old_path = existing.get("path", "")
+            if old_path and old_path != item["path"]:
+                try:
+                    os.remove(old_path)
+                except OSError:
+                    pass
+
+    action = "আপডেট" if existing_index is not None else "সেভ"
+    return jsonify(
+        success=True,
+        message=f"✅ Private channel file {action} হয়েছে। ইউজার ব্যবহার করবে: /download {command}",
+    )
 
 @app.route('/api/files/delete', methods=['POST'])
 @login_required
