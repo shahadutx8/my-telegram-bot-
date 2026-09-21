@@ -8,9 +8,10 @@ import json
 import unicodedata
 import hashlib
 import secrets as secrets_module
+import zipfile
 from google import genai
 from faker import Faker
-from datetime import datetime as _dt, timedelta, timezone
+from datetime import datetime as _dt, timedelta
 from werkzeug.security import generate_password_hash, check_password_hash as _wz_check
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for
 from threading import Thread, Lock
@@ -35,7 +36,14 @@ def _get_db():
         try:
             if _db_conn is None or _db_conn.closed:
                 import psycopg2
-                _db_conn = psycopg2.connect(_DATABASE_URL, sslmode='require')
+                try:
+                    _db_conn = psycopg2.connect(_DATABASE_URL, sslmode='require')
+                except Exception as ssl_error:
+                    # Local development PostgreSQL may not expose SSL, while
+                    # hosted PostgreSQL connections generally do.
+                    if "does not support SSL" not in str(ssl_error):
+                        raise
+                    _db_conn = psycopg2.connect(_DATABASE_URL, sslmode='disable')
                 _db_conn.autocommit = True
                 with _db_conn.cursor() as cur:
                     cur.execute("""
@@ -77,6 +85,51 @@ def db_set(key: str, value) -> bool:
         return True
     except Exception as e:
         print(f"[DB] set({key}) error: {e}")
+        return False
+
+def db_set_blob(key: str, value: bytes) -> bool:
+    """Store binary data in PostgreSQL. Returns False when DB is unavailable."""
+    conn = _get_db()
+    if not conn:
+        return False
+    try:
+        import psycopg2
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO bot_file_blobs (key, data, updated_at)
+                VALUES (%s, %s, NOW())
+                ON CONFLICT (key) DO UPDATE
+                SET data = EXCLUDED.data, updated_at = NOW()
+            """, (key, psycopg2.Binary(value)))
+        return True
+    except Exception as e:
+        print(f"[DB] blob set({key}) error: {e}")
+        return False
+
+def db_get_blob(key: str):
+    """Return binary data for a key, or None when unavailable/missing."""
+    conn = _get_db()
+    if not conn:
+        return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT data FROM bot_file_blobs WHERE key = %s", (key,))
+            row = cur.fetchone()
+            return bytes(row[0]) if row else None
+    except Exception as e:
+        print(f"[DB] blob get({key}) error: {e}")
+        return None
+
+def db_delete_blob(key: str) -> bool:
+    conn = _get_db()
+    if not conn:
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM bot_file_blobs WHERE key = %s", (key,))
+        return True
+    except Exception as e:
+        print(f"[DB] blob delete({key}) error: {e}")
         return False
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -209,26 +262,6 @@ DEFAULT_BOT_TEXTS = {
         "🆔 ID: `{user_id}`\n"
         "📊 মোট ইউজার: {total_users}"
     ),
-    "pending_user_notify": (
-        "⏳ *নতুন ইউজার Pending অবস্থায় আছে!*\n\n"
-        "👤 নাম: {fullname}\n"
-        "🔗 Username: {uname}\n"
-        "🆔 ID: `{user_id}`\n"
-        "✅ অনুমতি দিতে: `/approve {user_id}`\n"
-        "🚫 Reject করতে: `/reject {user_id} [কারণ]`"
-    ),
-    "access_pending": (
-        "⏳ আপনার bot access এখনো *Pending* আছে।\n\n"
-        "অ্যাডমিন অনুমোদন দিলে আপনি bot ব্যবহার করতে পারবেন।"
-    ),
-    "access_rejected": (
-        "🚫 আপনার bot access *Rejected* করা হয়েছে।\n"
-        "কারণ: {reason}"
-    ),
-    "access_approved": (
-        "✅ আপনার bot access *Approved* হয়েছে।\n\n"
-        "এখন যেকোনো দেশের নাম লিখে profile generate করতে পারবেন।"
-    ),
     # /panel (admin)
     "panel_reply": (
         "⚙️ কন্ট্রোল প্যানেল:\n\n"
@@ -248,19 +281,6 @@ DEFAULT_BOT_TEXTS = {
         "যেকোনো দেশের নাম লিখলেই প্রোফাইল পাবেন!"
     ),
     "history_copy_hint":  "💡 টেক্সটে ট্যাপ করলেই কপি হয়ে যাবে।",
-    # inactivity monitoring
-    "inactivity_warning": (
-        "⚠️ আপনাকে মনে করিয়ে দিচ্ছি:\n\n"
-        "আপনি গত {days} দিন বট ব্যবহার করেননি। আবার ব্যবহার করতে যেকোনো দেশের নাম লিখুন।"
-    ),
-    "inactive_admin_alert": (
-        "🚨 *Inactive User Alert*\n\n"
-        "👤 নাম: {first_name}\n"
-        "🔗 Username: {username}\n"
-        "🆔 User ID: `{user_id}`\n"
-        "🕒 শেষ ব্যবহার: `{last_seen}`\n"
-        "⏳ নিষ্ক্রিয়: `{inactive_days}` দিন"
-    ),
     # ban reply
     "banned_reply": (
         "🚫 আপনাকে এই বট থেকে ব্যান করা হয়েছে।\n"
@@ -420,7 +440,6 @@ def generate_ai_name(country_key: str = "bangladesh") -> str | None:
     except Exception as e:
         print(f"[generate_ai_name] error: {e}")
         return None
-
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Flask App Setup
@@ -666,160 +685,91 @@ def save_users(data: dict):
 
 KNOWN_USERS: dict = load_users()  # {user_id: {username, first_name, last_seen, profile_count}}
 
+USER_STATUSES = {"pending", "approved", "rejected"}
+USER_INACTIVE_DAYS = 7
+
+def _user_status(info: dict) -> str:
+    status = info.get("status", "approved")
+    return status if status in USER_STATUSES else "approved"
+
+def _auto_reject_inactive_users(now=None) -> bool:
+    """Reject approved/pending users whose last activity is older than 7 days."""
+    from datetime import datetime, timezone
+    now = now or datetime.now(timezone.utc)
+    changed = False
+    for info in KNOWN_USERS.values():
+        if _user_status(info) not in {"pending", "approved"}:
+            continue
+        last_seen = str(info.get("last_seen", "")).replace(" UTC", "")
+        try:
+            seen_at = datetime.strptime(last_seen, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+        if now - seen_at > timedelta(days=USER_INACTIVE_DAYS):
+            info["status"] = "rejected"
+            info["status_reason"] = "৭ দিন inactive থাকার কারণে automatic reject"
+            info["status_changed_at"] = now.strftime("%Y-%m-%d %H:%M:%S UTC")
+            changed = True
+    return changed
+
+def get_user_status(user_id: int) -> str:
+    with users_lock:
+        return _user_status(KNOWN_USERS.get(user_id, {}))
+
+def user_access_message(user_id: int) -> str:
+    status = get_user_status(user_id)
+    if status == "pending":
+        return "⏳ আপনার account approval-এর অপেক্ষায় আছে। Admin approve করলে bot ব্যবহার করতে পারবেন।"
+    if status == "rejected":
+        return "❌ আপনার account reject করা হয়েছে। Admin-এর সঙ্গে যোগাযোগ করুন।"
+    return ""
+
+def user_is_approved(user_id: int) -> bool:
+    return get_user_status(user_id) == "approved"
+
+def require_user_approval(bot_instance, message) -> bool:
+    notice = user_access_message(message.from_user.id)
+    if notice:
+        bot_instance.reply_to(message, notice)
+        return False
+    return True
+
 def track_user(user_id: int, username: str | None, first_name: str | None, increment_count: bool = False) -> bool:
     """Upsert user into registry. Thread-safe. Returns True if this is a brand-new user."""
     from datetime import datetime, timezone
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    now_dt = datetime.now(timezone.utc)
+    now = now_dt.strftime("%Y-%m-%d %H:%M:%S UTC")
     with users_lock:
+        _auto_reject_inactive_users(now_dt)
         is_new = user_id not in KNOWN_USERS
         existing = KNOWN_USERS.get(user_id, {})
-        # New users must be approved by the admin. Existing records from before
-        # this workflow are treated as approved for backward compatibility.
-        access_status = (
-            "approved" if user_id == get_admin_id()
-            else ("pending" if is_new else existing.get("approval_status", "approved"))
-        )
-        if access_status not in {"pending", "approved", "rejected"}:
-            access_status = "approved"
         KNOWN_USERS[user_id] = {
             "username":      username or existing.get("username", ""),
             "first_name":    first_name or existing.get("first_name", ""),
             "last_seen":     now,
             "profile_count": existing.get("profile_count", 0) + (1 if increment_count else 0),
-            "approval_status": access_status,
-            "approval_reason": existing.get("approval_reason", ""),
-            "approval_updated_at": existing.get("approval_updated_at", ""),
-            # Any new message starts a fresh inactivity period.
-            "inactivity_warning_sent": False,
-            "inactivity_admin_alerted": False,
+            "status":        _user_status(existing) if not is_new else "pending",
+            "status_reason": existing.get("status_reason", ""),
+            "status_changed_at": existing.get("status_changed_at", now if is_new else ""),
         }
         save_users(KNOWN_USERS)
     return is_new
 
-def get_user_access_status(user_id: int, info: dict | None = None) -> str:
-    """Return a normalized access status; legacy users remain approved."""
-    if user_id == get_admin_id():
-        return "approved"
-    info = info if info is not None else KNOWN_USERS.get(user_id, {})
-    status = info.get("approval_status", "approved")
-    return status if status in {"pending", "approved", "rejected"} else "approved"
-
-def set_user_access_status(user_id: int, status: str, reason: str = "") -> dict | None:
-    """Persist a user's approval state and return a snapshot of the user."""
-    if status not in {"pending", "approved", "rejected"}:
-        raise ValueError(f"Invalid access status: {status}")
-    now = _dt.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    with users_lock:
-        info = KNOWN_USERS.get(user_id)
-        if info is None:
-            return None
-        info["approval_status"] = status
-        info["approval_reason"] = reason if status == "rejected" else ""
-        info["approval_updated_at"] = now
-        if status == "approved":
-            # Approval starts a fresh activity cycle; do not immediately mark
-            # a newly approved user inactive based on their pending wait time.
-            info["last_seen"] = now
-            info["inactivity_warning_sent"] = False
-            info["inactivity_admin_alerted"] = False
-        save_users(KNOWN_USERS)
-        return dict(info)
-
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Admin Notifications
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-def notify_admin(text: str) -> bool:
-    """Send a notification to the admin user and report whether it was sent."""
+def notify_admin(text: str):
+    """Send a notification to the admin user. Silently ignores errors."""
     admin_id = get_admin_id()
     if not admin_id:
-        return False
+        return
     b = bot
     if not b or not bot_status.get("running"):
-        return False
+        return
     try:
         b.send_message(admin_id, text, parse_mode="Markdown")
-        return True
     except Exception as e:
         print(f"[notify_admin] failed: {e}")
-        return False
-
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# Inactive-user monitoring
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-INACTIVITY_WARNING_DAYS = 2
-INACTIVITY_ADMIN_ALERT_DAYS = 3
-
-def _parse_last_seen(value: str):
-    """Parse the UTC timestamp stored in KNOWN_USERS, or return None."""
-    try:
-        return _dt.strptime(value, "%Y-%m-%d %H:%M:%S UTC").replace(tzinfo=timezone.utc)
-    except (TypeError, ValueError):
-        return None
-
-def _inactive_days(last_seen: str, now=None) -> int | None:
-    parsed = _parse_last_seen(last_seen)
-    if parsed is None:
-        return None
-    now = now or _dt.now(timezone.utc)
-    return max(0, int((now - parsed).total_seconds() // 86400))
-
-def _send_inactivity_warning(user_id: int, days: int) -> bool:
-    """Send the one-time warning to a user. Returns False when delivery fails."""
-    b = bot
-    if not b or not bot_status.get("running"):
-        return False
-    try:
-        b.send_message(
-            user_id,
-            get_text("inactivity_warning", days=max(days, INACTIVITY_WARNING_DAYS)),
-        )
-        return True
-    except Exception as e:
-        print(f"[Inactivity] warning failed for {user_id}: {e}")
-        return False
-
-def _run_inactivity_monitor():
-    """Warn inactive users and alert the admin without repeating notifications."""
-    if not bot or not bot_status.get("running"):
-        return
-
-    now = _dt.now(timezone.utc)
-    with users_lock:
-        snapshot = [(uid, dict(info)) for uid, info in KNOWN_USERS.items()]
-
-    for user_id, info in snapshot:
-        # Banned users already receive a ban response; do not send reminders.
-        if is_banned(user_id) or get_user_access_status(user_id, info) != "approved":
-            continue
-        days = _inactive_days(info.get("last_seen", ""), now)
-        if days is None:
-            continue
-
-        if days >= INACTIVITY_WARNING_DAYS and not info.get("inactivity_warning_sent", False):
-            if _send_inactivity_warning(user_id, days):
-                with users_lock:
-                    current = KNOWN_USERS.get(user_id)
-                    if current and current.get("last_seen") == info.get("last_seen"):
-                        current["inactivity_warning_sent"] = True
-                        save_users(KNOWN_USERS)
-
-        if days >= INACTIVITY_ADMIN_ALERT_DAYS and not info.get("inactivity_admin_alerted", False):
-            username = f"@{info.get('username')}" if info.get("username") else "N/A"
-            sent = notify_admin(get_text(
-                "inactive_admin_alert",
-                first_name=info.get("first_name") or "N/A",
-                username=username,
-                user_id=user_id,
-                last_seen=info.get("last_seen") or "N/A",
-                inactive_days=days,
-            ))
-            if sent:
-                with users_lock:
-                    current = KNOWN_USERS.get(user_id)
-                    if current and current.get("last_seen") == info.get("last_seen"):
-                        current["inactivity_admin_alerted"] = True
-                        save_users(KNOWN_USERS)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Per-User Profile History
@@ -849,6 +799,177 @@ def record_user_profile(user_id: int, profile: dict):
         history.append(entry)
         USER_PROFILES[user_id] = history
         save_user_profiles(USER_PROFILES)
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Admin File Library
+# Files uploaded from the dashboard are kept on disk and sent as Telegram
+# documents when a user requests them with /download <command>.
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FILE_STORAGE_DIR = "bot_files"
+FILE_INDEX_PATH = "uploaded_files.json"
+FILE_MAX_BYTES = 50 * 1024 * 1024
+FILE_MAX_COUNT = 15
+stored_files_lock = Lock()
+
+def load_stored_files() -> list:
+    db_data = db_get("uploaded_files")
+    if isinstance(db_data, list):
+        return db_data
+    try:
+        with open(FILE_INDEX_PATH, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, list) else []
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return []
+
+def save_stored_files(files: list):
+    db_set("uploaded_files", files)
+    os.makedirs(FILE_STORAGE_DIR, exist_ok=True)
+    temp_path = FILE_INDEX_PATH + ".tmp"
+    with open(temp_path, "w", encoding="utf-8") as fh:
+        json.dump(files, fh, ensure_ascii=False, indent=2)
+    os.replace(temp_path, FILE_INDEX_PATH)
+
+STORED_FILES: list = load_stored_files()
+
+def get_stored_file(command: str) -> dict | None:
+    command = (command or "").strip().lstrip("/").lower()
+    with stored_files_lock:
+        return next((item for item in STORED_FILES if item.get("command") == command), None)
+
+def file_is_available(item: dict, user_id: int) -> bool:
+    """Check expiry and optional allow-list access for a stored file."""
+    expires_at = (item.get("expires_at") or "").strip()
+    if expires_at:
+        try:
+            if _dt.fromisoformat(expires_at) <= _dt.now():
+                return False
+        except ValueError:
+            pass
+    access_mode = item.get("access_mode", "all")
+    if access_mode == "selected":
+        allowed = {int(uid) for uid in item.get("allowed_users", []) if str(uid).lstrip("-").isdigit()}
+        if user_id not in allowed and user_id != get_admin_id():
+            return False
+    return True
+
+def get_available_stored_files(user_id: int) -> list:
+    with stored_files_lock:
+        return [item for item in STORED_FILES if file_is_available(item, user_id)]
+
+def get_file_commands_text(user_id: int | None = None) -> str:
+    with stored_files_lock:
+        files = [item for item in STORED_FILES if user_id is None or file_is_available(item, user_id)]
+    if not files:
+        return "📂 এখন কোনো ফাইল সংরক্ষিত নেই।"
+    lines = ["📂 ডাউনলোড করা যায় এমন ফাইল:\n"]
+    for item in files:
+        category = item.get("category", "General")
+        lines.append(
+            f"• [{category}] {item.get('title') or item.get('filename', 'File')} — "
+            f"/download {item.get('command', '')}"
+        )
+    return "\n".join(lines)
+
+def build_file_keyboard(user_id: int):
+    files = get_available_stored_files(user_id)
+    if not files:
+        return None
+    keyboard = telebot.types.InlineKeyboardMarkup(row_width=1)
+    for item in files:
+        title = item.get("title") or item.get("filename", "File")
+        category = item.get("category", "General")
+        version = f" v{item['version']}" if item.get("version") else ""
+        keyboard.add(telebot.types.InlineKeyboardButton(
+            f"📥 [{category}] {title}{version}"[:64],
+            callback_data=f"file:{item.get('id', '')}",
+        ))
+    return keyboard
+
+def record_file_download(item_id: str, user):
+    with stored_files_lock:
+        item = next((entry for entry in STORED_FILES if entry.get("id") == item_id), None)
+        if not item:
+            return
+        item["downloads"] = int(item.get("downloads", 0) or 0) + 1
+        recent = item.get("last_downloads", [])
+        if not isinstance(recent, list):
+            recent = []
+        recent.insert(0, {
+            "user_id": user.id,
+            "username": user.username or "",
+            "first_name": user.first_name or "",
+            "timestamp": _dt.now().strftime("%Y-%m-%d %H:%M:%S"),
+        })
+        item["last_downloads"] = recent[:20]
+        try:
+            save_stored_files(STORED_FILES)
+        except OSError as exc:
+            print(f"[FileDownload] stats save error: {exc}")
+
+def send_stored_file(bot_instance, chat_id: int, item: dict, user) -> tuple[bool, str]:
+    if not file_is_available(item, user.id):
+        return False, "এই ফাইলটি আপনার জন্য অনুমোদিত নয় অথবা এর মেয়াদ শেষ হয়েছে।"
+    entries = item.get("files")
+    if not isinstance(entries, list) or not entries:
+        entries = [{
+            "filename": item.get("filename", "download"),
+            "path": item.get("path", ""),
+        }]
+    database_zip = None
+    if item.get("storage") == "database" and any(
+        not entry.get("path") or not os.path.isfile(entry.get("path", ""))
+        for entry in entries
+    ):
+        blob = db_get_blob(item.get("id", ""))
+        if blob and item.get("storage_format") == "zip":
+            try:
+                database_zip = zipfile.ZipFile(io.BytesIO(blob))
+            except zipfile.BadZipFile:
+                database_zip = None
+    if not database_zip and any(
+        not entry.get("path") or not os.path.isfile(entry.get("path", ""))
+        for entry in entries
+    ):
+        return False, "ফাইলটি বর্তমানে পাওয়া যাচ্ছে না। অ্যাডমিনকে জানান।"
+    try:
+        for index, entry in enumerate(entries):
+            file_path = entry.get("path", "")
+            file_handle = None
+            should_close = False
+            if file_path and os.path.isfile(file_path):
+                file_handle = open(file_path, "rb")
+                should_close = True
+            elif database_zip:
+                try:
+                    file_handle = io.BytesIO(database_zip.read(entry.get("filename", "")))
+                    file_handle.name = entry.get("filename", "download")
+                except KeyError:
+                    file_handle = None
+            if file_handle is None:
+                return False, "ফাইলটি বর্তমানে পাওয়া যাচ্ছে না। অ্যাডমিনকে জানান।"
+            try:
+                bot_instance.send_document(
+                    chat_id,
+                    file_handle,
+                    caption=(
+                        item.get("caption") or item.get("title")
+                        if index == 0 else None
+                    ),
+                )
+            finally:
+                if should_close:
+                    file_handle.close()
+        if database_zip:
+            database_zip.close()
+        record_file_download(item.get("id", ""), user)
+        return True, ""
+    except Exception as exc:
+        print(f"[FileDownload] id={item.get('id', '')} error: {exc}")
+        return False, "ফাইল পাঠানো যায়নি। একটু পরে আবার চেষ্টা করুন।"
+    finally:
+        if database_zip:
+            database_zip.close()
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Broadcast state (in-memory)
@@ -956,17 +1077,19 @@ def generate_profile(country_key):
     facebook_id = full_name
 
     # ── 3. Unique username (→ email) ─────────────────────────────
+    # Base truncated to 12 chars + 4-digit suffix → total 5–16 chars (4–16 limit)
+    _uname_base = (clean_name[:12] or "user")
     with used_usernames_lock:
         for _ in range(10_000):
-            rnum     = random.randint(100_000, 999_999)   # 6-digit suffix
-            username = f"{clean_name}{rnum}"
+            rnum     = random.randint(1000, 9999)   # 4-digit suffix
+            username = f"{_uname_base}{rnum}"
             if username not in USED_USERNAMES:
                 USED_USERNAMES.add(username)
                 save_used_usernames(USED_USERNAMES)
                 break
         else:
-            rnum     = random.randint(100_000, 999_999)
-            username = f"{clean_name}{rnum}"
+            rnum     = random.randint(1000, 9999)
+            username = f"{_uname_base}{rnum}"
 
     email = f"{username}@gmail.com"
 
@@ -992,7 +1115,6 @@ def generate_profile(country_key):
         "mobile":      phone,
     }
 
-
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Telegram Handler Registration
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1001,47 +1123,18 @@ def register_handlers(b: telebot.TeleBot):
     def _get_enabled_fields():
         return CONFIG.get("bot_reply_fields", FIELD_KEYS)
 
-    def _access_allowed(message) -> bool:
-        """Gate regular bot features behind the admin-controlled access state."""
-        user_id = message.from_user.id
-        if user_id == get_admin_id():
-            return True
-        if is_banned(user_id):
-            b.reply_to(message, get_text("banned_reply"))
-            return False
-        info = KNOWN_USERS.get(user_id, {})
-        status = get_user_access_status(user_id, info)
-        if status == "pending":
-            b.reply_to(message, get_text("access_pending"))
-            return False
-        if status == "rejected":
-            reason = info.get("approval_reason") or "অ্যাডমিনের সিদ্ধান্ত"
-            b.reply_to(message, get_text("access_rejected", reason=reason))
-            return False
-        return True
-
-    def _notify_new_user(message):
-        user = message.from_user
-        uname = f"@{user.username}" if user.username else "N/A"
-        fullname = f"{user.first_name or ''} {user.last_name or ''}".strip() or "N/A"
-        status = get_user_access_status(user.id)
-        text_key = "pending_user_notify" if status == "pending" else "new_user_notify"
-        Thread(target=notify_admin, args=(
-            get_text(
-                text_key,
-                fullname=fullname,
-                uname=uname,
-                user_id=user.id,
-                total_users=f"{len(KNOWN_USERS):,}",
-            ),
-        ), daemon=True).start()
-
     @b.message_handler(commands=['start'])
     def send_welcome(message):
         is_new = track_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
-        if not _access_allowed(message):
+        if not user_is_approved(message.from_user.id):
+            b.reply_to(message, user_access_message(message.from_user.id))
             if is_new:
-                _notify_new_user(message)
+                user = message.from_user
+                Thread(target=notify_admin, args=(
+                    f"🆕 নতুন user approval-এর অপেক্ষায়\n"
+                    f"নাম: {user.first_name or 'N/A'}\n"
+                    f"User ID: {user.id}",
+                ), daemon=True).start()
             return
         used_count   = len(USED_NAMES)
         remaining    = get_total_combinations() - used_count
@@ -1052,7 +1145,14 @@ def register_handlers(b: telebot.TeleBot):
             remaining=f"{remaining:,}",
         ))
         if is_new:
-            _notify_new_user(message)
+            user = message.from_user
+            uname    = f"@{user.username}" if user.username else "N/A"
+            fullname = f"{user.first_name or ''} {user.last_name or ''}".strip() or "N/A"
+            Thread(target=notify_admin, args=(
+                get_text("new_user_notify",
+                    fullname=fullname, uname=uname,
+                    user_id=user.id, total_users=f"{len(KNOWN_USERS):,}"),
+            ), daemon=True).start()
 
     @b.message_handler(commands=['panel'])
     def admin_panel(message):
@@ -1079,11 +1179,10 @@ def register_handlers(b: telebot.TeleBot):
         else:
             b.reply_to(message, get_text("reset_not_admin"))
 
-
     @b.message_handler(commands=['history'])
     def send_history(message):
         track_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
-        if not _access_allowed(message):
+        if not require_user_approval(b, message):
             return
         with user_profiles_lock:
             history = list(USER_PROFILES.get(message.from_user.id, []))
@@ -1102,11 +1201,77 @@ def register_handlers(b: telebot.TeleBot):
         lines.append(get_text("history_copy_hint"))
         b.reply_to(message, "\n".join(lines), parse_mode="Markdown")
 
+    @b.message_handler(commands=['files'])
+    def list_downloadable_files(message):
+        track_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
+        if not require_user_approval(b, message):
+            return
+        if is_banned(message.from_user.id):
+            b.reply_to(message, get_text("banned_reply"))
+            return
+        keyboard = build_file_keyboard(message.from_user.id)
+        b.reply_to(
+            message,
+            get_file_commands_text(message.from_user.id),
+            reply_markup=keyboard,
+        )
+
+    @b.callback_query_handler(func=lambda call: bool(call.data and call.data.startswith("file:")))
+    def download_file_button(call):
+        user = call.from_user
+        track_user(user.id, user.username, user.first_name)
+        notice = user_access_message(user.id)
+        if notice:
+            b.send_message(call.message.chat.id, notice)
+            return
+        try:
+            b.answer_callback_query(call.id, "ফাইল পাঠানো হচ্ছে…")
+        except Exception:
+            pass
+        file_id = call.data.split(":", 1)[1].strip()
+        with stored_files_lock:
+            item = next((entry.copy() for entry in STORED_FILES if entry.get("id") == file_id), None)
+        if not item:
+            b.send_message(call.message.chat.id, "❌ ফাইলটি আর পাওয়া যাচ্ছে না।")
+            return
+        ok, error = send_stored_file(b, call.message.chat.id, item, user)
+        if not ok:
+            b.send_message(call.message.chat.id, f"⚠️ {error}")
+
+    @b.message_handler(commands=['download', 'getfile'])
+    def download_stored_file(message):
+        track_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
+        if not require_user_approval(b, message):
+            return
+        if is_banned(message.from_user.id):
+            b.reply_to(message, get_text("banned_reply"))
+            return
+        parts = (message.text or "").strip().split(maxsplit=1)
+        command = parts[1].strip().lstrip("/").lower() if len(parts) > 1 else ""
+        if not command:
+            b.reply_to(message, "📥 কমান্ড দিন: `/download command`", parse_mode="Markdown")
+            return
+        item = get_stored_file(command)
+        if not item or not file_is_available(item, message.from_user.id):
+            b.reply_to(
+                message,
+                f"❌ `{command}` নামে কোনো ফাইল পাওয়া যায়নি, অথবা আপনার access নেই/মেয়াদ শেষ।\n\n"
+                f"{get_file_commands_text(message.from_user.id)}",
+                parse_mode="Markdown",
+            )
+            return
+        ok, error = send_stored_file(b, message.chat.id, item, message.from_user)
+        if not ok:
+            b.reply_to(message, f"⚠️ {error}")
+
     @b.message_handler(commands=['ainame'])
     def send_ai_name(message):
         track_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
+        if not require_user_approval(b, message):
+            return
 
-        if not _access_allowed(message):
+        if is_banned(message.from_user.id):
+            b.reply_to(message, get_text("banned_reply"))
             return
 
         if not _GEMINI_KEY:
@@ -1143,7 +1308,7 @@ def register_handlers(b: telebot.TeleBot):
                 clean = re.sub(r'[^a-zA-Z0-9]', '', ai_name).lower()
                 if clean:
                     rnum = random.randint(1000, 9999)
-                    profile["username"] = f"{clean}{rnum}"
+                    profile["username"] = f"{clean[:12]}{rnum}"
                     profile["email"]    = f"{clean}{rnum}@gmail.com"
                     profile["google"]   = profile["email"]
 
@@ -1197,14 +1362,7 @@ def register_handlers(b: telebot.TeleBot):
             "📊 *পরিসংখ্যান ও লগ*\n"
             "• /stats — বট স্ট্যাটস\n"
             "• /users — ইউজার লিস্ট\n"
-            "• /usage — কোন user কোন নাম কখন ব্যবহার করেছে\n"
-            "• /inactive — ২+ দিন inactive ইউজার\n\n"
-            "🔐 *ইউজার Access Control*\n"
-            "• /pending — Pending ইউজার\n"
-            "• /approve `<id>` — Bot access দিন\n"
-            "• /reject `<id>` [কারণ] — Bot access বন্ধ করুন\n"
-            "• /approved — Approved ইউজার\n"
-            "• /rejected — Rejected ইউজার\n\n"
+            "• /usage — নেম ইউজেজ লগ\n\n"
             "🚫 *ব্যান ম্যানেজমেন্ট*\n"
             "• /banned — ব্যানড লিস্ট\n"
             "• /ban `<id>` [কারণ] — ব্যান করুন\n"
@@ -1219,97 +1377,12 @@ def register_handlers(b: telebot.TeleBot):
             "• /reset — ব্যবহৃত নাম রিসেট\n\n"
             "📢 *ব্রডকাস্ট*\n"
             "• /broadcast `<টেক্সট>` — সবাইকে মেসেজ\n\n"
+            "📂 *ফাইল ডাউনলোড*\n"
+            "• /files — সংরক্ষিত ফাইলের তালিকা\n"
+            "• /download `<কমান্ড>` — ফাইল পাঠান\n\n"
             "🛑 *বট স্টপ*\n"
             "• /stopbot — পোলিং বন্ধ করুন",
             parse_mode="Markdown"
-        )
-
-    @b.message_handler(commands=['pending', 'approved', 'rejected'])
-    def access_users_list(message):
-        if not _admin_only(message): return
-        requested = message.text.strip().split()[0].split("@")[0].lstrip("/").lower()
-        status = requested if requested in {"pending", "approved", "rejected"} else "pending"
-        labels = {
-            "pending": "⏳ Pending",
-            "approved": "✅ Approved",
-            "rejected": "🚫 Rejected",
-        }
-        with users_lock:
-            rows = [
-                (uid, dict(info))
-                for uid, info in KNOWN_USERS.items()
-                if get_user_access_status(uid, info) == status
-            ]
-        rows.sort(key=lambda item: item[1].get("last_seen", ""), reverse=True)
-        if not rows:
-            b.reply_to(message, f"✅ বর্তমানে কোনো {labels[status]} ইউজার নেই।")
-            return
-        lines = [f"{labels[status]} *ইউজার* — মোট {len(rows):,}\n"]
-        for uid, info in rows[:50]:
-            username = f"@{info.get('username')}" if info.get("username") else "N/A"
-            name = info.get("first_name") or "N/A"
-            last_seen = info.get("last_seen") or "N/A"
-            lines.append(
-                f"👤 {name} {username}\n"
-                f"🆔 `{uid}` | 🕒 `{last_seen}`"
-            )
-            if status == "pending":
-                lines.append(f"   ✅ /approve {uid}  🚫 /reject {uid}")
-            elif status == "rejected" and info.get("approval_reason"):
-                lines.append(f"   কারণ: {info['approval_reason']}")
-        if len(rows) > 50:
-            lines.append(f"\n…আরও {len(rows) - 50} জন")
-        b.reply_to(message, "\n".join(lines), parse_mode="Markdown")
-
-    @b.message_handler(commands=['approve'])
-    def approve_user_cmd(message):
-        if not _admin_only(message): return
-        parts = message.text.strip().split()
-        if len(parts) < 2 or not parts[1].lstrip("-").isdigit():
-            b.reply_to(message, "⚠️ ব্যবহার: /approve `<user_id>`", parse_mode="Markdown")
-            return
-        user_id = int(parts[1])
-        if user_id == get_admin_id():
-            b.reply_to(message, "ℹ️ Admin-এর access আগে থেকেই Approved।")
-            return
-        info = set_user_access_status(user_id, "approved")
-        if info is None:
-            b.reply_to(message, f"❌ User `{user_id}` পাওয়া যায়নি।", parse_mode="Markdown")
-            return
-        try:
-            b.send_message(user_id, get_text("access_approved"))
-        except Exception as e:
-            print(f"[Access] approved notification failed for {user_id}: {e}")
-        b.reply_to(
-            message,
-            f"✅ User `{user_id}` এখন *Approved*। Bot ব্যবহার করতে পারবে।",
-            parse_mode="Markdown",
-        )
-
-    @b.message_handler(commands=['reject'])
-    def reject_user_cmd(message):
-        if not _admin_only(message): return
-        parts = message.text.strip().split(maxsplit=2)
-        if len(parts) < 2 or not parts[1].lstrip("-").isdigit():
-            b.reply_to(message, "⚠️ ব্যবহার: /reject `<user_id>` [কারণ]", parse_mode="Markdown")
-            return
-        user_id = int(parts[1])
-        if user_id == get_admin_id():
-            b.reply_to(message, "❌ নিজের admin access Reject করা যাবে না।")
-            return
-        reason = parts[2].strip() if len(parts) > 2 else "অ্যাডমিনের সিদ্ধান্ত"
-        info = set_user_access_status(user_id, "rejected", reason)
-        if info is None:
-            b.reply_to(message, f"❌ User `{user_id}` পাওয়া যায়নি।", parse_mode="Markdown")
-            return
-        try:
-            b.send_message(user_id, get_text("access_rejected", reason=reason))
-        except Exception as e:
-            print(f"[Access] rejected notification failed for {user_id}: {e}")
-        b.reply_to(
-            message,
-            f"🚫 User `{user_id}` এখন *Rejected*। Bot ব্যবহার করতে পারবে না।\nকারণ: {reason}",
-            parse_mode="Markdown",
         )
 
     @b.message_handler(commands=['stats'])
@@ -1350,46 +1423,46 @@ def register_handlers(b: telebot.TeleBot):
             uname = f"@{info['username']}" if info.get("username") else "—"
             name  = info.get("first_name") or "—"
             count = info.get("profile_count", 0)
-            status = get_user_access_status(uid, info).capitalize()
-            lines.append(f"{rank}. {name} {uname}\n   🆔 `{uid}` | 📋 {count} profiles | {status}")
+            lines.append(f"{rank}. {name} {uname}\n   🆔 `{uid}` | 📋 {count} profiles")
         if page < total_pages:
             lines.append(f"\n➡️ পরের পেজ: /users {page + 1}")
         b.reply_to(message, "\n".join(lines), parse_mode="Markdown")
 
-    @b.message_handler(commands=['inactive'])
-    def inactive_users_list(message):
+    @b.message_handler(commands=['approve', 'reject', 'pending'])
+    def user_workflow_cmd(message):
         if not _admin_only(message): return
-        now = _dt.now(timezone.utc)
-        with users_lock:
-            rows = []
-            for uid, info in KNOWN_USERS.items():
-                days = _inactive_days(info.get("last_seen", ""), now)
-                if days is not None and days >= INACTIVITY_WARNING_DAYS:
-                    rows.append((days, uid, dict(info)))
-
-        rows.sort(key=lambda item: (item[0], item[2].get("last_seen", "")), reverse=True)
-        if not rows:
-            b.reply_to(message, "✅ বর্তমানে ২ দিন বা তার বেশি inactive কোনো ইউজার নেই।")
+        command = (message.text or "").split()[0].lstrip("/").lower()
+        parts = message.text.strip().split(maxsplit=1)
+        if command == "pending" and len(parts) == 1:
+            with users_lock:
+                pending = [
+                    (uid, info) for uid, info in KNOWN_USERS.items()
+                    if _user_status(info) == "pending"
+                ]
+            if not pending:
+                b.reply_to(message, "✅ কোনো pending user নেই।")
+                return
+            lines = [f"⏳ *Pending users* ({len(pending)})\n"]
+            for uid, info in pending[:30]:
+                lines.append(f"• `{uid}` {info.get('first_name') or '—'}")
+            b.reply_to(message, "\n".join(lines), parse_mode="Markdown")
             return
-
-        parts = message.text.strip().split()
-        page = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 1
-        per_page = 10
-        total_pages = max((len(rows) + per_page - 1) // per_page, 1)
-        page = max(1, min(page, total_pages))
-        chunk = rows[(page - 1) * per_page: page * per_page]
-        lines = [f"⏳ *Inactive ইউজার* — পেজ {page}/{total_pages} (মোট {len(rows):,})\n"]
-        for days, uid, info in chunk:
-            username = f"@{info.get('username')}" if info.get('username') else "N/A"
-            first_name = info.get("first_name") or "N/A"
-            lines.append(
-                f"👤 {first_name} {username}\n"
-                f"🆔 `{uid}` | ⏳ {days} দিন inactive\n"
-                f"🕒 শেষ ব্যবহার: `{info.get('last_seen', 'N/A')}`"
-            )
-        if page < total_pages:
-            lines.append(f"\n➡️ পরের পেজ: /inactive {page + 1}")
-        b.reply_to(message, "\n".join(lines), parse_mode="Markdown")
+        if len(parts) < 2 or not parts[1].split()[0].lstrip("-").isdigit():
+            b.reply_to(message, "⚠️ ব্যবহার: /approve `<user_id>` অথবা /reject `<user_id>`", parse_mode="Markdown")
+            return
+        uid = int(parts[1].split()[0])
+        status = "approved" if command == "approve" else "rejected"
+        reason = "Admin bot command"
+        with users_lock:
+            info = KNOWN_USERS.get(uid)
+            if not info:
+                b.reply_to(message, "❌ ইউজার পাওয়া যায়নি।")
+                return
+            info["status"] = status
+            info["status_reason"] = reason
+            info["status_changed_at"] = _dt.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+            save_users(KNOWN_USERS)
+        b.reply_to(message, f"✅ ইউজার `{uid}` {status} করা হয়েছে।", parse_mode="Markdown")
 
     @b.message_handler(commands=['usage'])
     def usage_list(message):
@@ -1397,26 +1470,18 @@ def register_handlers(b: telebot.TeleBot):
         parts    = message.text.strip().split()
         page     = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 1
         per_page = 15
-        with name_log_lock:
-            entries = list(reversed(NAME_LOG))
-        total    = len(entries)
+        names    = sorted(USED_NAMES)
+        total    = len(names)
         if not total:
             b.reply_to(message, "ℹ️ এখনও কোনো নাম ব্যবহৃত হয়নি।")
             return
         total_pages = max((total + per_page - 1) // per_page, 1)
         page        = max(1, min(page, total_pages))
         start       = (page - 1) * per_page
-        chunk       = entries[start:start + per_page]
+        chunk       = names[start:start + per_page]
         lines = [f"📋 *ব্যবহৃত নাম লগ* — পেজ {page}/{total_pages} (মোট {total:,})\n"]
-        for i, entry in enumerate(chunk, start + 1):
-            username = f"@{entry.get('username')}" if entry.get('username') else "N/A"
-            first_name = entry.get("first_name") or "N/A"
-            lines.append(
-                f"{i}. 👤 `{entry.get('name', 'N/A')}`\n"
-                f"   User: {first_name} {username}\n"
-                f"   🆔 `{entry.get('user_id', 'N/A')}`\n"
-                f"   🕒 `{entry.get('timestamp', 'N/A')}`"
-            )
+        for i, name in enumerate(chunk, start + 1):
+            lines.append(f"{i}. `{name}`")
         if page < total_pages:
             lines.append(f"\n➡️ পরের পেজ: /usage {page + 1}")
         b.reply_to(message, "\n".join(lines), parse_mode="Markdown")
@@ -1609,9 +1674,20 @@ def register_handlers(b: telebot.TeleBot):
     def handle_all_messages(message):
         is_new = track_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
         if is_new:
-            _notify_new_user(message)
+            user = message.from_user
+            uname    = f"@{user.username}" if user.username else "N/A"
+            fullname = f"{user.first_name or ''} {user.last_name or ''}".strip() or "N/A"
+            Thread(target=notify_admin, args=(
+                get_text("new_user_notify",
+                    fullname=fullname, uname=uname,
+                    user_id=user.id, total_users=f"{len(KNOWN_USERS):,}"),
+            ), daemon=True).start()
 
-        if not _access_allowed(message):
+        if not require_user_approval(b, message):
+            return
+
+        if is_banned(message.from_user.id):
+            b.reply_to(message, get_text("banned_reply"))
             return
 
         if not message.text:
@@ -1658,7 +1734,6 @@ def register_handlers(b: telebot.TeleBot):
                 ),
                 parse_mode="Markdown"
             )
-
         except Exception:
             b.reply_to(message, get_text("profile_failed"))
 
@@ -2201,6 +2276,8 @@ def api_ai_prompts_reset():
 def api_user_stats():
     q = request.args.get('q', '').strip().lower()
     with users_lock:
+        if _auto_reject_inactive_users():
+            save_users(KNOWN_USERS)
         data = [
             {"user_id": uid, **info}
             for uid, info in KNOWN_USERS.items()
@@ -2214,6 +2291,28 @@ def api_user_stats():
             or q in (e.get("first_name") or "").lower()
         ]
     return jsonify(entries=data, total=len(KNOWN_USERS))
+
+@app.route('/api/user-status', methods=['POST'])
+@login_required
+def api_user_status():
+    data = request.get_json(force=True) or {}
+    try:
+        user_id = int(data.get("user_id"))
+    except (TypeError, ValueError):
+        return jsonify(success=False, error="সঠিক User ID দিন।")
+    status = str(data.get("status", "")).strip().lower()
+    if status not in USER_STATUSES:
+        return jsonify(success=False, error="Status pending, approved অথবা rejected হতে হবে।")
+    reason = str(data.get("reason", "")).strip()[:300]
+    with users_lock:
+        info = KNOWN_USERS.get(user_id)
+        if not info:
+            return jsonify(success=False, error="ইউজার পাওয়া যায়নি।")
+        info["status"] = status
+        info["status_reason"] = reason
+        info["status_changed_at"] = _dt.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+        save_users(KNOWN_USERS)
+    return jsonify(success=True, status=status, message=f"✅ ইউজার status {status} করা হয়েছে।")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Flask Routes — Broadcast API
@@ -2345,12 +2444,14 @@ def _run_due_schedules():
             save_schedules(SCHEDULES)
 
 def _scheduler_loop():
-    """Background daemon: checks every 30 s for due schedules."""
+    """Background daemon: checks schedules and inactive user status."""
     while True:
         _time_module.sleep(30)
         try:
-            _run_inactivity_monitor()
             _run_due_schedules()
+            with users_lock:
+                if _auto_reject_inactive_users():
+                    save_users(KNOWN_USERS)
         except Exception as e:
             print(f"[Scheduler] loop error: {e}")
 
@@ -2423,6 +2524,221 @@ def api_schedules_toggle():
         save_schedules(SCHEDULES)
     return jsonify(success=True, active=sched['active'],
                    message=f"✅ {'চালু' if sched['active'] else 'বন্ধ'} করা হয়েছে।")
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Flask Routes — Admin File Library
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+@app.route('/api/files', methods=['GET'])
+@login_required
+def api_files():
+    with stored_files_lock:
+        entries = [
+            {
+                "id": item.get("id", ""),
+                "title": item.get("title", ""),
+                "command": item.get("command", ""),
+                "filename": item.get("filename", ""),
+                "caption": item.get("caption", ""),
+                "category": item.get("category", "General"),
+                "version": item.get("version", ""),
+                "access_mode": item.get("access_mode", "all"),
+                "allowed_users": item.get("allowed_users", []),
+                "expires_at": item.get("expires_at", ""),
+                "downloads": int(item.get("downloads", 0) or 0),
+                "last_downloads": item.get("last_downloads", [])[-5:],
+                "size": item.get("size", 0),
+                "file_count": item.get("file_count", len(item.get("files", [])) or 1),
+                "filenames": [
+                    entry.get("filename", "")
+                    for entry in item.get("files", [])
+                    if isinstance(entry, dict)
+                ] or [item.get("filename", "")],
+                "created_at": item.get("created_at", ""),
+            }
+            for item in STORED_FILES
+        ]
+    return jsonify(success=True, files=entries)
+
+@app.route('/api/files/upload', methods=['POST'])
+@login_required
+def api_files_upload():
+    title = request.form.get("title", "").strip()
+    command = request.form.get("command", "").strip().lstrip("/").lower()
+    caption = request.form.get("caption", "").strip()
+    category = request.form.get("category", "").strip()[:40] or "General"
+    version = request.form.get("version", "").strip()[:30]
+    access_mode = request.form.get("access_mode", "all").strip().lower()
+    allowed_raw = request.form.get("allowed_users", "").strip()
+    expires_at = request.form.get("expires_at", "").strip()
+    replace = request.form.get("replace", "").strip().lower() in {"1", "true", "yes", "on"}
+    file_objs = request.files.getlist("files")
+    if not file_objs:
+        legacy_file = request.files.get("file")
+        file_objs = [legacy_file] if legacy_file else []
+
+    if not title:
+        return jsonify(success=False, error="ফাইলের একটি নাম দিন।")
+    if not re.fullmatch(r"[a-z][a-z0-9_]{1,31}", command):
+        return jsonify(
+            success=False,
+            error="কমান্ড 2–32 অক্ষরের হতে হবে; শুধু ইংরেজি ছোট হাতের অক্ষর, সংখ্যা ও _ ব্যবহার করুন।",
+        )
+    if access_mode not in {"all", "selected"}:
+        return jsonify(success=False, error="Access mode সঠিক নয়।")
+    allowed_users = []
+    if access_mode == "selected":
+        try:
+            allowed_users = sorted({int(value.strip()) for value in allowed_raw.split(",") if value.strip()})
+        except ValueError:
+            return jsonify(success=False, error="Allowed User ID কমা দিয়ে সঠিকভাবে দিন।")
+        if not allowed_users:
+            return jsonify(success=False, error="Selected users access-এর জন্য অন্তত একটি User ID দিন।")
+    if expires_at:
+        try:
+            if _dt.fromisoformat(expires_at) <= _dt.now():
+                return jsonify(success=False, error="Expiry সময় ভবিষ্যতের হতে হবে।")
+        except ValueError:
+            return jsonify(success=False, error="Expiry সময় সঠিক নয়।")
+    file_objs = [file_obj for file_obj in file_objs if file_obj and file_obj.filename]
+    if not file_objs:
+        return jsonify(success=False, error="ফাইল সিলেক্ট করুন।")
+    if len(file_objs) > FILE_MAX_COUNT:
+        return jsonify(success=False, error=f"একটি command-এর মধ্যে সর্বোচ্চ {FILE_MAX_COUNT}টি ফাইল রাখা যাবে।")
+    uploaded_files = []
+    total_size = 0
+    for file_obj in file_objs:
+        filename = os.path.basename(file_obj.filename).strip() or "download"
+        raw = file_obj.read()
+        if not raw:
+            return jsonify(success=False, error=f"{filename} খালি ফাইল।")
+        total_size += len(raw)
+        if total_size > FILE_MAX_BYTES:
+            return jsonify(success=False, error="একটি bundle-এর সব ফাইল মিলিয়ে সর্বোচ্চ 50 MB রাখা যাবে।")
+        uploaded_files.append({"filename": filename, "raw": raw})
+
+    with stored_files_lock:
+        existing_index = next(
+            (i for i, item in enumerate(STORED_FILES) if item.get("command") == command),
+            None,
+        )
+        if existing_index is not None and not replace:
+            return jsonify(success=False, error=f"/download {command} ইতিমধ্যে ব্যবহার করা হয়েছে।")
+        os.makedirs(FILE_STORAGE_DIR, exist_ok=True)
+        file_entries = []
+        try:
+            for uploaded in uploaded_files:
+                stored_name = f"{secrets_module.token_hex(16)}_{uploaded['filename']}"
+                file_path = os.path.join(FILE_STORAGE_DIR, stored_name)
+                with open(file_path, "wb") as fh:
+                    fh.write(uploaded["raw"])
+                file_entries.append({
+                    "filename": uploaded["filename"],
+                    "path": file_path,
+                    "size": len(uploaded["raw"]),
+                })
+        except OSError as exc:
+            for entry in file_entries:
+                try:
+                    os.remove(entry["path"])
+                except OSError:
+                    pass
+            print(f"[FileUpload] save error: {exc}")
+            return jsonify(success=False, error="ফাইল সংরক্ষণ করা যায়নি।")
+
+        existing = STORED_FILES[existing_index] if existing_index is not None else {}
+        item_id = existing.get("id") or secrets_module.token_hex(8)
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+            for uploaded in uploaded_files:
+                bundle.writestr(uploaded["filename"], uploaded["raw"])
+        item = {
+            "id": item_id,
+            "title": title,
+            "command": command,
+            "caption": caption,
+            "category": category,
+            "version": version,
+            "access_mode": access_mode,
+            "allowed_users": allowed_users,
+            "expires_at": expires_at,
+            "filename": file_entries[0]["filename"],
+            "path": file_entries[0]["path"] if len(file_entries) == 1 else "",
+            "files": file_entries,
+            "file_count": len(file_entries),
+            "size": total_size,
+            "created_at": _dt.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "downloads": int(existing.get("downloads", 0) or 0),
+            "last_downloads": existing.get("last_downloads", []),
+        }
+        item["storage"] = "database" if db_set_blob(item["id"], zip_buffer.getvalue()) else "disk"
+        item["storage_format"] = "zip"
+        if existing_index is None:
+            STORED_FILES.append(item)
+        else:
+            STORED_FILES[existing_index] = item
+        try:
+            save_stored_files(STORED_FILES)
+        except OSError as exc:
+            if existing_index is None:
+                STORED_FILES.pop()
+            else:
+                STORED_FILES[existing_index] = existing
+            for entry in file_entries:
+                try:
+                    os.remove(entry["path"])
+                except OSError:
+                    pass
+            print(f"[FileUpload] index save error: {exc}")
+            return jsonify(success=False, error="ফাইলের তথ্য সংরক্ষণ করা যায়নি।")
+        if existing_index is not None:
+            old_paths = [existing.get("path", "")]
+            old_paths.extend(
+                entry.get("path", "")
+                for entry in existing.get("files", [])
+                if isinstance(entry, dict)
+            )
+            for old_path in set(old_paths):
+                if old_path and old_path not in {entry["path"] for entry in file_entries}:
+                    try:
+                        os.remove(old_path)
+                    except OSError:
+                        pass
+
+    action = "আপডেট" if existing_index is not None else "সেভ"
+    return jsonify(
+        success=True,
+        message=f"✅ {len(file_entries)}টি ফাইল {action} হয়েছে। ইউজার ব্যবহার করবে: /download {command}",
+    )
+
+@app.route('/api/files/delete', methods=['POST'])
+@login_required
+def api_files_delete():
+    data = request.get_json(force=True) or {}
+    file_id = str(data.get("id", "")).strip()
+    with stored_files_lock:
+        index = next((i for i, item in enumerate(STORED_FILES) if item.get("id") == file_id), None)
+        if index is None:
+            return jsonify(success=False, error="ফাইল পাওয়া যায়নি।")
+        item = STORED_FILES.pop(index)
+        try:
+            save_stored_files(STORED_FILES)
+        except OSError as exc:
+            STORED_FILES.insert(index, item)
+            print(f"[FileDelete] index save error: {exc}")
+            return jsonify(success=False, error="ফাইল মুছে ফেলা যায়নি।")
+        paths = [item.get("path", "")]
+        paths.extend(
+            entry.get("path", "")
+            for entry in item.get("files", [])
+            if isinstance(entry, dict)
+        )
+        for path in set(paths):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        db_delete_blob(item.get("id", ""))
+    return jsonify(success=True, message="🗑️ ফাইল মুছে ফেলা হয়েছে।")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Flask Routes — Send Media to User(s)
