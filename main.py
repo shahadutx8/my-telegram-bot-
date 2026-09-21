@@ -303,6 +303,38 @@ DEFAULT_BOT_TEXTS = {
         "🆔 ID: `{user_id}`\n"
         "📊 মোট ইউজার: {total_users}"
     ),
+    "approval_pending": (
+        "⏳ আপনার access এখনও অ্যাডমিন approval-এর অপেক্ষায় আছে।\n\n"
+        "অ্যাডমিন approve করলে আপনি বট ব্যবহার করতে পারবেন।"
+    ),
+    "approval_rejected": (
+        "❌ আপনার access request approve করা হয়নি।\n\n"
+        "প্রয়োজনে অ্যাডমিনের সঙ্গে যোগাযোগ করুন।"
+    ),
+    "approval_granted": (
+        "✅ আপনার access approve করা হয়েছে!\n\n"
+        "এখন আপনি বট ব্যবহার করতে পারবেন।"
+    ),
+    "approval_admin_notify": (
+        "🆕 *নতুন ইউজার approval-এর অপেক্ষায়!*\n\n"
+        "👤 নাম: {fullname}\n"
+        "🔗 Username: {uname}\n"
+        "🆔 ID: `{user_id}`\n"
+        "📊 মোট ইউজার: {total_users}\n\n"
+        "নিচের button থেকে Approve বা Reject করুন।"
+    ),
+    "approval_admin_approved": "✅ ইউজার `{user_id}` approve করা হয়েছে।",
+    "approval_admin_rejected": "🚫 ইউজার `{user_id}` reject করা হয়েছে।",
+    "approval_admin_not_found": "❌ এই User ID-এর কোনো registered user পাওয়া যায়নি।",
+    "approval_admin_usage": "⚠️ ব্যবহার: `/{action} <user_id>`",
+    "approval_none_pending": "✅ কোনো pending approval নেই।",
+    "approval_pending_list": "⏳ *Pending approvals* — মোট `{count}` জন\n\n{users}",
+    "approval_admin_menu": (
+        "\n\n✅ *ইউজার approval*\n"
+        "• /pending — pending user list\n"
+        "• /approve `<user_id>` — approve করুন\n"
+        "• /reject `<user_id>` — reject করুন"
+    ),
     # /panel (admin)
     "panel_reply": (
         "⚙️ কন্ট্রোল প্যানেল:\n\n"
@@ -783,14 +815,63 @@ def track_user(user_id: int, username: str | None, first_name: str | None, incre
             "first_name":    first_name or existing.get("first_name", ""),
             "last_seen":     now,
             "profile_count": existing.get("profile_count", 0) + (1 if increment_count else 0),
+            # Existing users from before approval mode remain approved.
+            "approval_status": existing.get(
+                "approval_status",
+                "pending" if is_new else "approved",
+            ),
         }
         save_users(KNOWN_USERS)
     return is_new
 
+
+def get_approval_status(user_id: int) -> str:
+    """Return pending, approved, or rejected for a registered user."""
+    if user_id == get_admin_id():
+        return "approved"
+    with users_lock:
+        info = KNOWN_USERS.get(user_id)
+        if not info:
+            return "pending"
+        status = info.get("approval_status")
+        # Users created before approval mode was introduced are trusted.
+        return status if status in ("pending", "approved", "rejected") else "approved"
+
+
+def is_user_approved(user_id: int) -> bool:
+    return get_approval_status(user_id) == "approved"
+
+
+def set_approval_status(user_id: int, status: str) -> bool:
+    """Persist an approval decision. Returns False if the user is unknown."""
+    if status not in ("pending", "approved", "rejected"):
+        return False
+    with users_lock:
+        if user_id not in KNOWN_USERS:
+            return False
+        KNOWN_USERS[user_id]["approval_status"] = status
+        save_users(KNOWN_USERS)
+    return True
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Admin Notifications
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-def notify_admin(text: str):
+def build_approval_keyboard(user_id: int):
+    keyboard = telebot.types.InlineKeyboardMarkup(row_width=2)
+    keyboard.add(
+        telebot.types.InlineKeyboardButton(
+            "✅ Approve",
+            callback_data=f"approval:approve:{user_id}",
+        ),
+        telebot.types.InlineKeyboardButton(
+            "❌ Reject",
+            callback_data=f"approval:reject:{user_id}",
+        ),
+    )
+    return keyboard
+
+
+def notify_admin(text: str, reply_markup=None):
     """Send a notification to the admin user. Silently ignores errors."""
     admin_id = get_admin_id()
     if not admin_id:
@@ -799,7 +880,10 @@ def notify_admin(text: str):
     if not b or not bot_status.get("running"):
         return
     try:
-        b.send_message(admin_id, text, parse_mode="Markdown")
+        kwargs = {"parse_mode": "Markdown"}
+        if reply_markup is not None:
+            kwargs["reply_markup"] = reply_markup
+        b.send_message(admin_id, text, **kwargs)
     except Exception as e:
         print(f"[notify_admin] failed: {e}")
 
@@ -1206,6 +1290,42 @@ def register_handlers(b: telebot.TeleBot):
             parse_mode="Markdown",
         )
 
+    def _notify_new_pending_user(message):
+        user = getattr(message, "from_user", message)
+        uname = f"@{user.username}" if user.username else "N/A"
+        fullname = f"{user.first_name or ''} {user.last_name or ''}".strip() or "N/A"
+        Thread(target=notify_admin, args=(
+            get_text(
+                "approval_admin_notify",
+                fullname=fullname,
+                uname=uname,
+                user_id=user.id,
+                total_users=f"{len(KNOWN_USERS):,}",
+            ),
+            build_approval_keyboard(user.id),
+        ), daemon=True).start()
+
+    def _track_entry_user(subject):
+        user = getattr(subject, "from_user", subject)
+        is_new = track_user(
+            user.id,
+            user.username,
+            user.first_name,
+        )
+        if is_new and user.id != get_admin_id():
+            _notify_new_pending_user(subject)
+        return is_new
+
+    def _approval_guard(message) -> bool:
+        """Stop unapproved users before any user-facing bot action."""
+        user_id = message.from_user.id
+        if is_user_approved(user_id):
+            return True
+        status = get_approval_status(user_id)
+        key = "approval_rejected" if status == "rejected" else "approval_pending"
+        b.reply_to(message, get_text(key))
+        return False
+
     def _send_country_menu(message, action: str):
         icon = "🤖" if action == "ai" else "⚡"
         b.reply_to(
@@ -1216,6 +1336,10 @@ def register_handlers(b: telebot.TeleBot):
 
     def _send_generated_profile(chat_id, user, country_input):
         """Generate and send a regular profile from a menu or typed country."""
+        if not is_user_approved(user.id):
+            key = "approval_rejected" if get_approval_status(user.id) == "rejected" else "approval_pending"
+            b.send_message(chat_id, get_text(key))
+            return
         if is_banned(user.id):
             b.send_message(chat_id, get_text("banned_reply"))
             return
@@ -1261,6 +1385,10 @@ def register_handlers(b: telebot.TeleBot):
 
     def _run_ai_generation(chat_id, user, country_arg):
         """Generate an AI-assisted profile and send it asynchronously."""
+        if not is_user_approved(user.id):
+            key = "approval_rejected" if get_approval_status(user.id) == "rejected" else "approval_pending"
+            b.send_message(chat_id, get_text(key))
+            return
         if is_banned(user.id):
             b.send_message(chat_id, get_text("banned_reply"))
             return
@@ -1330,7 +1458,9 @@ def register_handlers(b: telebot.TeleBot):
 
     @b.message_handler(commands=['start'])
     def send_welcome(message):
-        is_new = track_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
+        _track_entry_user(message)
+        if not _approval_guard(message):
+            return
         used_count   = len(USED_NAMES)
         remaining    = get_total_combinations() - used_count
         country_keys = ", ".join(k.capitalize() for k in get_country_details().keys())
@@ -1339,16 +1469,6 @@ def register_handlers(b: telebot.TeleBot):
             used_count=f"{used_count:,}",
             remaining=f"{remaining:,}",
         ), reply_markup=_user_menu_keyboard())
-        if is_new:
-            user = message.from_user
-            uname    = f"@{user.username}" if user.username else "N/A"
-            fullname = f"{user.first_name or ''} {user.last_name or ''}".strip() or "N/A"
-            Thread(target=notify_admin, args=(
-                get_text("new_user_notify",
-                    fullname=fullname, uname=uname,
-                    user_id=user.id, total_users=f"{len(KNOWN_USERS):,}"),
-            ), daemon=True).start()
-
     @b.message_handler(commands=['panel'])
     def admin_panel(message):
         admin_id = get_admin_id()
@@ -1376,7 +1496,9 @@ def register_handlers(b: telebot.TeleBot):
 
     @b.message_handler(commands=['history'])
     def send_history(message):
-        track_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
+        _track_entry_user(message)
+        if not _approval_guard(message):
+            return
         with user_profiles_lock:
             history = list(USER_PROFILES.get(message.from_user.id, []))
         if not history:
@@ -1396,7 +1518,9 @@ def register_handlers(b: telebot.TeleBot):
 
     @b.message_handler(commands=['files'])
     def list_downloadable_files(message):
-        track_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
+        _track_entry_user(message)
+        if not _approval_guard(message):
+            return
         if is_banned(message.from_user.id):
             b.reply_to(message, get_text("banned_reply"))
             return
@@ -1410,7 +1534,21 @@ def register_handlers(b: telebot.TeleBot):
     @b.callback_query_handler(func=lambda call: bool(call.data and call.data.startswith("file:")))
     def download_file_button(call):
         user = call.from_user
-        track_user(user.id, user.username, user.first_name)
+        _track_entry_user(user)
+        if not is_user_approved(user.id):
+            try:
+                b.answer_callback_query(
+                    call.id,
+                    get_text(
+                        "approval_rejected"
+                        if get_approval_status(user.id) == "rejected"
+                        else "approval_pending",
+                    )[:200],
+                    show_alert=True,
+                )
+            except Exception:
+                pass
+            return
         try:
             b.answer_callback_query(call.id, "ফাইল পাঠানো হচ্ছে…")
         except Exception:
@@ -1427,7 +1565,9 @@ def register_handlers(b: telebot.TeleBot):
 
     @b.message_handler(commands=['download', 'getfile'])
     def download_stored_file(message):
-        track_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
+        _track_entry_user(message)
+        if not _approval_guard(message):
+            return
         if is_banned(message.from_user.id):
             b.reply_to(message, get_text("banned_reply"))
             return
@@ -1451,10 +1591,12 @@ def register_handlers(b: telebot.TeleBot):
 
     @b.message_handler(commands=['help'])
     def help_command(message):
+        _track_entry_user(message)
+        if not _approval_guard(message):
+            return
         if is_banned(message.from_user.id):
             b.reply_to(message, get_text("banned_reply"))
             return
-        track_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
         b.reply_to(
             message,
             get_text("help"),
@@ -1464,6 +1606,9 @@ def register_handlers(b: telebot.TeleBot):
 
     @b.message_handler(func=lambda message: (message.text or "").strip() == USER_MENU_BUTTONS["generate"])
     def menu_generate(message):
+        _track_entry_user(message)
+        if not _approval_guard(message):
+            return
         if is_banned(message.from_user.id):
             b.reply_to(message, get_text("banned_reply"))
             return
@@ -1471,6 +1616,9 @@ def register_handlers(b: telebot.TeleBot):
 
     @b.message_handler(func=lambda message: (message.text or "").strip() == USER_MENU_BUTTONS["ai"])
     def menu_ai(message):
+        _track_entry_user(message)
+        if not _approval_guard(message):
+            return
         if is_banned(message.from_user.id):
             b.reply_to(message, get_text("banned_reply"))
             return
@@ -1499,6 +1647,21 @@ def register_handlers(b: telebot.TeleBot):
             return
         action, country = parts[1], parts[2].lower()
         user = call.from_user
+        _track_entry_user(user)
+        if not is_user_approved(user.id):
+            try:
+                b.answer_callback_query(
+                    call.id,
+                    get_text(
+                        "approval_rejected"
+                        if get_approval_status(user.id) == "rejected"
+                        else "approval_pending",
+                    )[:200],
+                    show_alert=True,
+                )
+            except Exception:
+                pass
+            return
         if is_banned(user.id):
             b.send_message(call.message.chat.id, get_text("banned_reply"))
             return
@@ -1509,7 +1672,9 @@ def register_handlers(b: telebot.TeleBot):
 
     @b.message_handler(commands=['ainame'])
     def send_ai_name(message):
-        track_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
+        _track_entry_user(message)
+        if not _approval_guard(message):
+            return
         parts       = message.text.strip().split(maxsplit=1)
         country_arg = parts[1].strip().lower() if len(parts) > 1 else "bangladesh"
         _run_ai_generation(message.chat.id, message.from_user, country_arg)
@@ -1553,9 +1718,131 @@ def register_handlers(b: telebot.TeleBot):
             "• /files — সংরক্ষিত ফাইলের তালিকা\n"
             "• /download `<কমান্ড>` — ফাইল পাঠান\n\n"
             "🛑 *বট স্টপ*\n"
-            "• /stopbot — পোলিং বন্ধ করুন",
+            "• /stopbot — পোলিং বন্ধ করুন"
+            + get_text("approval_admin_menu"),
             parse_mode="Markdown"
         )
+
+    @b.message_handler(commands=['pending'])
+    def pending_users_cmd(message):
+        if not _admin_only(message):
+            return
+        with users_lock:
+            pending = [
+                (uid, info.copy())
+                for uid, info in KNOWN_USERS.items()
+                if info.get("approval_status") == "pending"
+            ]
+        if not pending:
+            b.reply_to(message, get_text("approval_none_pending"))
+            return
+        lines = []
+        keyboard = telebot.types.InlineKeyboardMarkup(row_width=2)
+        for uid, info in pending[:50]:
+            username = f"@{info.get('username')}" if info.get("username") else "—"
+            name = info.get("first_name") or "—"
+            lines.append(f"• {name} {username} — ID: {uid}")
+            keyboard.add(
+                telebot.types.InlineKeyboardButton(
+                    f"✅ {uid}",
+                    callback_data=f"approval:approve:{uid}",
+                ),
+                telebot.types.InlineKeyboardButton(
+                    f"❌ {uid}",
+                    callback_data=f"approval:reject:{uid}",
+                ),
+            )
+        if len(pending) > 50:
+            lines.append(f"\n…আরও {len(pending) - 50} জন pending আছে।")
+        b.reply_to(
+            message,
+            get_text(
+                "approval_pending_list",
+                count=len(pending),
+                users="\n".join(lines),
+            ),
+            reply_markup=keyboard,
+            parse_mode="Markdown",
+        )
+
+    def _set_user_approval_from_command(message, status: str):
+        if not _admin_only(message):
+            return
+        parts = (message.text or "").strip().split()
+        action = "approve" if status == "approved" else "reject"
+        if len(parts) < 2 or not parts[1].lstrip("-").isdigit():
+            b.reply_to(
+                message,
+                get_text("approval_admin_usage", action=action),
+                parse_mode="Markdown",
+            )
+            return
+        user_id = int(parts[1])
+        if not set_approval_status(user_id, status):
+            b.reply_to(message, get_text("approval_admin_not_found"))
+            return
+        key = "approval_admin_approved" if status == "approved" else "approval_admin_rejected"
+        b.reply_to(message, get_text(key, user_id=user_id), parse_mode="Markdown")
+        try:
+            if status == "approved":
+                b.send_message(
+                    user_id,
+                    get_text("approval_granted"),
+                    reply_markup=_user_menu_keyboard(),
+                )
+            else:
+                b.send_message(user_id, get_text("approval_rejected"))
+        except Exception as e:
+            print(f"[approval] user notification failed for {user_id}: {e}")
+
+    @b.message_handler(commands=['approve'])
+    def approve_user_cmd(message):
+        _set_user_approval_from_command(message, "approved")
+
+    @b.message_handler(commands=['reject'])
+    def reject_user_cmd(message):
+        _set_user_approval_from_command(message, "rejected")
+
+    @b.callback_query_handler(func=lambda call: bool(call.data and call.data.startswith("approval:")))
+    def approval_callback(call):
+        if call.from_user.id != get_admin_id():
+            try:
+                b.answer_callback_query(call.id, "❌ শুধু অ্যাডমিন এই action করতে পারবেন।", show_alert=True)
+            except Exception:
+                pass
+            return
+        parts = call.data.split(":")
+        if len(parts) != 3 or not parts[2].lstrip("-").isdigit():
+            return
+        action, user_id = parts[1], int(parts[2])
+        status = "approved" if action == "approve" else "rejected" if action == "reject" else None
+        if not status or not set_approval_status(user_id, status):
+            try:
+                b.answer_callback_query(call.id, get_text("approval_admin_not_found"), show_alert=True)
+            except Exception:
+                pass
+            return
+        key = "approval_admin_approved" if status == "approved" else "approval_admin_rejected"
+        try:
+            b.answer_callback_query(call.id, get_text(key, user_id=user_id))
+            b.edit_message_reply_markup(
+                call.message.chat.id,
+                call.message.message_id,
+                reply_markup=None,
+            )
+        except Exception:
+            pass
+        try:
+            if status == "approved":
+                b.send_message(
+                    user_id,
+                    get_text("approval_granted"),
+                    reply_markup=_user_menu_keyboard(),
+                )
+            else:
+                b.send_message(user_id, get_text("approval_rejected"))
+        except Exception as e:
+            print(f"[approval] user notification failed for {user_id}: {e}")
 
     @b.message_handler(commands=['stats'])
     def bot_stats(message):
@@ -1809,16 +2096,10 @@ def register_handlers(b: telebot.TeleBot):
 
     @b.message_handler(func=lambda message: True)
     def handle_all_messages(message):
-        is_new = track_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
-        if is_new:
-            user = message.from_user
-            uname    = f"@{user.username}" if user.username else "N/A"
-            fullname = f"{user.first_name or ''} {user.last_name or ''}".strip() or "N/A"
-            Thread(target=notify_admin, args=(
-                get_text("new_user_notify",
-                    fullname=fullname, uname=uname,
-                    user_id=user.id, total_users=f"{len(KNOWN_USERS):,}"),
-            ), daemon=True).start()
+        _track_entry_user(message)
+
+        if not _approval_guard(message):
+            return
 
         if is_banned(message.from_user.id):
             b.reply_to(message, get_text("banned_reply"))
