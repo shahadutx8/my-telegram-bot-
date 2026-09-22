@@ -8,7 +8,6 @@ import json
 import unicodedata
 import hashlib
 import secrets as secrets_module
-import zipfile
 from google import genai
 from faker import Faker
 from datetime import datetime as _dt, timedelta
@@ -50,6 +49,13 @@ def _get_db():
                         CREATE TABLE IF NOT EXISTS kv_store (
                             key   TEXT PRIMARY KEY,
                             value TEXT NOT NULL
+                        )
+                    """)
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS bot_file_blobs (
+                            key         TEXT PRIMARY KEY,
+                            data        BYTEA NOT NULL,
+                            updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
                         )
                     """)
         except Exception as e:
@@ -167,6 +173,28 @@ FIELD_EMOJI = {
     'username':    '🔗',
 }
 
+PROFILE_COPY_KEYS = ('full_name', 'google', 'email', 'mobile', 'username')
+
+def build_profile_copy_keyboard(profile: dict, enabled_fields) -> object | None:
+    """Return one protected Copy Text button for each useful profile field."""
+    enabled = set(enabled_fields or FIELD_KEYS)
+    buttons = []
+    for key in PROFILE_COPY_KEYS:
+        value = str(profile.get(key, '') or '').strip()
+        if key not in enabled or not value:
+            continue
+        buttons.append(
+            telebot.types.InlineKeyboardButton(
+                f"📋 {FIELD_LABELS[key]}",
+                copy_text=telebot.types.CopyTextButton(text=value[:256]),
+            )
+        )
+    if not buttons:
+        return None
+    keyboard = telebot.types.InlineKeyboardMarkup(row_width=2)
+    keyboard.add(*buttons)
+    return keyboard
+
 # Minimal emergency fallback — used only when names_default.json is missing or corrupt.
 _EMERGENCY_DEFAULTS: dict = {
     "bd_first_names": ["Md"],
@@ -254,22 +282,18 @@ DEFAULT_BOT_TEXTS = {
         "📋 /history — আগের প্রোফাইল দেখুন\n"
         "🤖 /ainame [দেশ] — AI দিয়ে real-style নাম তৈরি করুন"
     ),
-    "button_generate_prompt": "⚡ Profile তৈরি করতে একটি দেশের নাম লিখুন:\n{country_keys}",
-    "button_ai_prompt": "🤖 AI name-এর জন্য `/ainame <দেশ>` লিখুন। উদাহরণ: `/ainame Bangladesh`",
-    "button_help": (
-        "❓ *Help*\n\n"
-        "⚡ Profile: একটি দেশের নাম লিখুন\n"
-        "🤖 AI Name: `/ainame <দেশ>`\n"
-        "📋 History: `/history`\n"
-        "📂 Files: `/files` অথবা `/download <command>`"
+    "user_menu": (
+        "📱 *বট মেনু*\n\n"
+        "নিচের বাটন থেকে একটি অপশন বেছে নিন।"
     ),
-    "approval_pending": "⏳ আপনার account approval-এর অপেক্ষায় আছে। Admin approve করলে bot ব্যবহার করতে পারবেন।",
-    "approval_rejected": "❌ আপনার account reject করা হয়েছে। Admin-এর সঙ্গে যোগাযোগ করুন।",
-    "pending_user_notify": (
-        "🆕 *নতুন ইউজার approval-এর অপেক্ষায়*\n\n"
-        "👤 নাম: {fullname}\n"
-        "🔗 Username: {uname}\n"
-        "🆔 ID: `{user_id}`"
+    "country_menu": "{icon} কোন দেশের প্রোফাইল চান? একটি দেশ নির্বাচন করুন:",
+    "help": (
+        "❓ *কীভাবে ব্যবহার করবেন*\n\n"
+        "⚡ Generate Profile চাপুন, তারপর দেশ নির্বাচন করুন।\n"
+        "🤖 AI Name চাপলে AI দিয়ে নামসহ প্রোফাইল তৈরি হবে।\n"
+        "📋 My History দিয়ে আগের প্রোফাইল দেখুন।\n"
+        "📂 Files দিয়ে আপনার জন্য উন্মুক্ত ফাইল দেখুন।\n\n"
+        "আপনি চাইলে সরাসরি দেশের নাম লিখেও প্রোফাইল তৈরি করতে পারেন।"
     ),
     # admin notification — new user joined
     "new_user_notify": (
@@ -278,6 +302,38 @@ DEFAULT_BOT_TEXTS = {
         "🔗 Username: {uname}\n"
         "🆔 ID: `{user_id}`\n"
         "📊 মোট ইউজার: {total_users}"
+    ),
+    "approval_pending": (
+        "⏳ আপনার access এখনও অ্যাডমিন approval-এর অপেক্ষায় আছে।\n\n"
+        "অ্যাডমিন approve করলে আপনি বট ব্যবহার করতে পারবেন।"
+    ),
+    "approval_rejected": (
+        "❌ আপনার access request approve করা হয়নি।\n\n"
+        "প্রয়োজনে অ্যাডমিনের সঙ্গে যোগাযোগ করুন।"
+    ),
+    "approval_granted": (
+        "✅ আপনার access approve করা হয়েছে!\n\n"
+        "এখন আপনি বট ব্যবহার করতে পারবেন।"
+    ),
+    "approval_admin_notify": (
+        "🆕 *নতুন ইউজার approval-এর অপেক্ষায়!*\n\n"
+        "👤 নাম: {fullname}\n"
+        "🔗 Username: {uname}\n"
+        "🆔 ID: `{user_id}`\n"
+        "📊 মোট ইউজার: {total_users}\n\n"
+        "নিচের button থেকে Approve বা Reject করুন।"
+    ),
+    "approval_admin_approved": "✅ ইউজার `{user_id}` approve করা হয়েছে।",
+    "approval_admin_rejected": "🚫 ইউজার `{user_id}` reject করা হয়েছে।",
+    "approval_admin_not_found": "❌ এই User ID-এর কোনো registered user পাওয়া যায়নি।",
+    "approval_admin_usage": "⚠️ ব্যবহার: `/{action} <user_id>`",
+    "approval_none_pending": "✅ কোনো pending approval নেই।",
+    "approval_pending_list": "⏳ *Pending approvals* — মোট `{count}` জন\n\n{users}",
+    "approval_admin_menu": (
+        "\n\n✅ *ইউজার approval*\n"
+        "• /pending — pending user list\n"
+        "• /approve `<user_id>` — approve করুন\n"
+        "• /reject `<user_id>` — reject করুন"
     ),
     # /panel (admin)
     "panel_reply": (
@@ -317,7 +373,7 @@ DEFAULT_BOT_TEXTS = {
         "━━━━━━━━━━━━━━━━━━━━\n"
         "{field_lines}"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        "💡 টেক্সটে ট্যাপ করলেই অটো-কপি হয়ে যাবে।"
+        "💡 নিচের field button চাপলে শুধু ওই তথ্য কপি হবে।"
     ),
     # regular profile reply
     "unknown_country": (
@@ -332,7 +388,7 @@ DEFAULT_BOT_TEXTS = {
         "━━━━━━━━━━━━━━━━━━━━\n"
         "{field_lines}"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        "💡 তথ্যের ওপর ট্যাপ করলেই অটো-কপি হয়ে যাবে।"
+        "💡 নিচের field button চাপলে শুধু ওই তথ্য কপি হবে।"
     ),
     "profile_failed":     "⚠️ দুঃখিত, প্রোফাইল ডাটা জেনারেট করা সম্ভব হয়নি।",
     # admin notification — bot crashed
@@ -515,6 +571,51 @@ bot_thread = None
 bot_lock = Lock()
 bot_status = {"running": False, "token_preview": "", "error": ""}
 
+# Telegram content protection is enabled for every message and media sent by this bot.
+class ProtectedTeleBot(telebot.TeleBot):
+    """TeleBot that always marks outgoing content as protected."""
+
+    @staticmethod
+    def _protected_kwargs(kwargs):
+        kwargs["protect_content"] = True
+        return kwargs
+
+    def send_message(self, *args, **kwargs):
+        return super().send_message(*args, **self._protected_kwargs(kwargs))
+
+    def reply_to(self, *args, **kwargs):
+        return super().reply_to(*args, **self._protected_kwargs(kwargs))
+
+    def send_document(self, *args, **kwargs):
+        return super().send_document(*args, **self._protected_kwargs(kwargs))
+
+    def send_photo(self, *args, **kwargs):
+        return super().send_photo(*args, **self._protected_kwargs(kwargs))
+
+    def send_video(self, *args, **kwargs):
+        return super().send_video(*args, **self._protected_kwargs(kwargs))
+
+    def send_audio(self, *args, **kwargs):
+        return super().send_audio(*args, **self._protected_kwargs(kwargs))
+
+    def send_voice(self, *args, **kwargs):
+        return super().send_voice(*args, **self._protected_kwargs(kwargs))
+
+    def send_animation(self, *args, **kwargs):
+        return super().send_animation(*args, **self._protected_kwargs(kwargs))
+
+    def send_sticker(self, *args, **kwargs):
+        return super().send_sticker(*args, **self._protected_kwargs(kwargs))
+
+    def send_video_note(self, *args, **kwargs):
+        return super().send_video_note(*args, **self._protected_kwargs(kwargs))
+
+    def send_media_group(self, *args, **kwargs):
+        return super().send_media_group(*args, **self._protected_kwargs(kwargs))
+
+    def copy_message(self, *args, **kwargs):
+        return super().copy_message(*args, **self._protected_kwargs(kwargs))
+
 # Admin ID and developer name are now stored in config.json and managed via the dashboard.
 
 def make_bot(token: str):
@@ -523,7 +624,7 @@ def make_bot(token: str):
     if not token:
         return None, "No token provided."
     try:
-        b = telebot.TeleBot(token)
+        b = ProtectedTeleBot(token)
         b.get_me()          # synchronous API call — raises if token is invalid
         register_handlers(b)
         return b, ""
@@ -702,69 +803,11 @@ def save_users(data: dict):
 
 KNOWN_USERS: dict = load_users()  # {user_id: {username, first_name, last_seen, profile_count}}
 
-USER_STATUSES = {"pending", "approved", "rejected"}
-USER_INACTIVE_DAYS = 7
-
-def _user_status(info: dict) -> str:
-    status = info.get("status", "approved")
-    return status if status in USER_STATUSES else "approved"
-
-def _auto_reject_inactive_users(now=None) -> bool:
-    """Reject approved/pending users whose last activity is older than 7 days."""
-    from datetime import datetime, timezone
-    now = now or datetime.now(timezone.utc)
-    changed = False
-    for info in KNOWN_USERS.values():
-        if _user_status(info) not in {"pending", "approved"}:
-            continue
-        last_seen = str(info.get("last_seen", "")).replace(" UTC", "")
-        try:
-            seen_at = datetime.strptime(last_seen, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-        except ValueError:
-            continue
-        if now - seen_at > timedelta(days=USER_INACTIVE_DAYS):
-            info["status"] = "rejected"
-            info["status_reason"] = "৭ দিন inactive থাকার কারণে automatic reject"
-            info["status_changed_at"] = now.strftime("%Y-%m-%d %H:%M:%S UTC")
-            changed = True
-    return changed
-
-def get_user_status(user_id: int) -> str:
-    with users_lock:
-        return _user_status(KNOWN_USERS.get(user_id, {}))
-
-def user_access_message(user_id: int) -> str:
-    status = get_user_status(user_id)
-    if status == "pending":
-        return get_text("approval_pending")
-    if status == "rejected":
-        return get_text("approval_rejected")
-    return ""
-
-def user_is_approved(user_id: int) -> bool:
-    return get_user_status(user_id) == "approved"
-
-def require_user_approval(bot_instance, message) -> bool:
-    notice = user_access_message(message.from_user.id)
-    if notice:
-        bot_instance.reply_to(message, notice)
-        return False
-    return True
-
-def build_main_reply_keyboard():
-    keyboard = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
-    keyboard.row("⚡ Generate Profile", "🤖 AI Name")
-    keyboard.row("📋 My History", "📂 Files")
-    keyboard.row("❓ Help")
-    return keyboard
-
 def track_user(user_id: int, username: str | None, first_name: str | None, increment_count: bool = False) -> bool:
     """Upsert user into registry. Thread-safe. Returns True if this is a brand-new user."""
     from datetime import datetime, timezone
-    now_dt = datetime.now(timezone.utc)
-    now = now_dt.strftime("%Y-%m-%d %H:%M:%S UTC")
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     with users_lock:
-        _auto_reject_inactive_users(now_dt)
         is_new = user_id not in KNOWN_USERS
         existing = KNOWN_USERS.get(user_id, {})
         KNOWN_USERS[user_id] = {
@@ -772,17 +815,63 @@ def track_user(user_id: int, username: str | None, first_name: str | None, incre
             "first_name":    first_name or existing.get("first_name", ""),
             "last_seen":     now,
             "profile_count": existing.get("profile_count", 0) + (1 if increment_count else 0),
-            "status":        _user_status(existing) if not is_new else "pending",
-            "status_reason": existing.get("status_reason", ""),
-            "status_changed_at": existing.get("status_changed_at", now if is_new else ""),
+            # Existing users from before approval mode remain approved.
+            "approval_status": existing.get(
+                "approval_status",
+                "pending" if is_new else "approved",
+            ),
         }
         save_users(KNOWN_USERS)
     return is_new
 
+
+def get_approval_status(user_id: int) -> str:
+    """Return pending, approved, or rejected for a registered user."""
+    if user_id == get_admin_id():
+        return "approved"
+    with users_lock:
+        info = KNOWN_USERS.get(user_id)
+        if not info:
+            return "pending"
+        status = info.get("approval_status")
+        # Users created before approval mode was introduced are trusted.
+        return status if status in ("pending", "approved", "rejected") else "approved"
+
+
+def is_user_approved(user_id: int) -> bool:
+    return get_approval_status(user_id) == "approved"
+
+
+def set_approval_status(user_id: int, status: str) -> bool:
+    """Persist an approval decision. Returns False if the user is unknown."""
+    if status not in ("pending", "approved", "rejected"):
+        return False
+    with users_lock:
+        if user_id not in KNOWN_USERS:
+            return False
+        KNOWN_USERS[user_id]["approval_status"] = status
+        save_users(KNOWN_USERS)
+    return True
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Admin Notifications
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-def notify_admin(text: str):
+def build_approval_keyboard(user_id: int):
+    keyboard = telebot.types.InlineKeyboardMarkup(row_width=2)
+    keyboard.add(
+        telebot.types.InlineKeyboardButton(
+            "✅ Approve",
+            callback_data=f"approval:approve:{user_id}",
+        ),
+        telebot.types.InlineKeyboardButton(
+            "❌ Reject",
+            callback_data=f"approval:reject:{user_id}",
+        ),
+    )
+    return keyboard
+
+
+def notify_admin(text: str, reply_markup=None):
     """Send a notification to the admin user. Silently ignores errors."""
     admin_id = get_admin_id()
     if not admin_id:
@@ -791,7 +880,10 @@ def notify_admin(text: str):
     if not b or not bot_status.get("running"):
         return
     try:
-        b.send_message(admin_id, text, parse_mode="Markdown")
+        kwargs = {"parse_mode": "Markdown"}
+        if reply_markup is not None:
+            kwargs["reply_markup"] = reply_markup
+        b.send_message(admin_id, text, **kwargs)
     except Exception as e:
         print(f"[notify_admin] failed: {e}")
 
@@ -832,7 +924,6 @@ def record_user_profile(user_id: int, profile: dict):
 FILE_STORAGE_DIR = "bot_files"
 FILE_INDEX_PATH = "uploaded_files.json"
 FILE_MAX_BYTES = 50 * 1024 * 1024
-FILE_MAX_COUNT = 15
 stored_files_lock = Lock()
 
 def load_stored_files() -> list:
@@ -934,66 +1025,67 @@ def record_file_download(item_id: str, user):
 def send_stored_file(bot_instance, chat_id: int, item: dict, user) -> tuple[bool, str]:
     if not file_is_available(item, user.id):
         return False, "এই ফাইলটি আপনার জন্য অনুমোদিত নয় অথবা এর মেয়াদ শেষ হয়েছে।"
-    entries = item.get("files")
-    if not isinstance(entries, list) or not entries:
-        entries = [{
-            "filename": item.get("filename", "download"),
-            "path": item.get("path", ""),
-        }]
-    database_zip = None
-    if item.get("storage") == "database" and any(
-        not entry.get("path") or not os.path.isfile(entry.get("path", ""))
-        for entry in entries
-    ):
+
+    if item.get("storage") == "telegram_channel":
+        source_chat_id = str(item.get("source_chat_id", "")).strip()
+        try:
+            source_message_id = int(item.get("source_message_id", 0))
+        except (TypeError, ValueError):
+            source_message_id = 0
+        if not source_chat_id or source_message_id <= 0:
+            return False, "Private channel file-এর source তথ্য অসম্পূর্ণ।"
+        try:
+            copy_kwargs = {"protect_content": True}
+            if item.get("caption"):
+                copy_kwargs["caption"] = item["caption"]
+            bot_instance.copy_message(
+                chat_id,
+                source_chat_id,
+                source_message_id,
+                **copy_kwargs,
+            )
+            record_file_download(item.get("id", ""), user)
+            return True, ""
+        except Exception as exc:
+            print(
+                f"[ChannelFile] source={source_chat_id}/{source_message_id} "
+                f"error: {exc}"
+            )
+            return False, (
+                "Private channel থেকে file পাঠানো যায়নি। "
+                "Bot-কে channel-এ member/admin করে channel ID ও message ID যাচাই করুন।"
+            )
+
+    file_path = item.get("path", "")
+    file_handle = None
+    should_close = False
+    if file_path and os.path.isfile(file_path):
+        try:
+            file_handle = open(file_path, "rb")
+            should_close = True
+        except OSError:
+            file_handle = None
+    if file_handle is None and item.get("storage") == "database":
         blob = db_get_blob(item.get("id", ""))
-        if blob and item.get("storage_format") == "zip":
-            try:
-                database_zip = zipfile.ZipFile(io.BytesIO(blob))
-            except zipfile.BadZipFile:
-                database_zip = None
-    if not database_zip and any(
-        not entry.get("path") or not os.path.isfile(entry.get("path", ""))
-        for entry in entries
-    ):
+        if blob:
+            file_handle = io.BytesIO(blob)
+            file_handle.name = item.get("filename", "download")
+    if file_handle is None:
         return False, "ফাইলটি বর্তমানে পাওয়া যাচ্ছে না। অ্যাডমিনকে জানান।"
     try:
-        for index, entry in enumerate(entries):
-            file_path = entry.get("path", "")
-            file_handle = None
-            should_close = False
-            if file_path and os.path.isfile(file_path):
-                file_handle = open(file_path, "rb")
-                should_close = True
-            elif database_zip:
-                try:
-                    file_handle = io.BytesIO(database_zip.read(entry.get("filename", "")))
-                    file_handle.name = entry.get("filename", "download")
-                except KeyError:
-                    file_handle = None
-            if file_handle is None:
-                return False, "ফাইলটি বর্তমানে পাওয়া যাচ্ছে না। অ্যাডমিনকে জানান।"
-            try:
-                bot_instance.send_document(
-                    chat_id,
-                    file_handle,
-                    caption=(
-                        item.get("caption") or item.get("title")
-                        if index == 0 else None
-                    ),
-                )
-            finally:
-                if should_close:
-                    file_handle.close()
-        if database_zip:
-            database_zip.close()
+        bot_instance.send_document(
+            chat_id,
+            file_handle,
+            caption=item.get("caption") or item.get("title") or item.get("filename", ""),
+        )
         record_file_download(item.get("id", ""), user)
         return True, ""
     except Exception as exc:
         print(f"[FileDownload] id={item.get('id', '')} error: {exc}")
         return False, "ফাইল পাঠানো যায়নি। একটু পরে আবার চেষ্টা করুন।"
     finally:
-        if database_zip:
-            database_zip.close()
+        if should_close:
+            file_handle.close()
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Broadcast state (in-memory)
@@ -1147,45 +1239,236 @@ def register_handlers(b: telebot.TeleBot):
     def _get_enabled_fields():
         return CONFIG.get("bot_reply_fields", FIELD_KEYS)
 
+    USER_MENU_BUTTONS = {
+        "generate": "⚡ Generate Profile",
+        "ai":       "🤖 AI Name",
+        "history":  "📋 My History",
+        "files":    "📂 Files",
+        "help":     "❓ Help",
+    }
+
+    def _user_menu_keyboard():
+        keyboard = telebot.types.ReplyKeyboardMarkup(
+            resize_keyboard=True,
+            row_width=2,
+        )
+        keyboard.add(
+            telebot.types.KeyboardButton(USER_MENU_BUTTONS["generate"]),
+            telebot.types.KeyboardButton(USER_MENU_BUTTONS["ai"]),
+        )
+        keyboard.add(
+            telebot.types.KeyboardButton(USER_MENU_BUTTONS["history"]),
+            telebot.types.KeyboardButton(USER_MENU_BUTTONS["files"]),
+        )
+        keyboard.add(telebot.types.KeyboardButton(USER_MENU_BUTTONS["help"]))
+        return keyboard
+
+    def _country_keyboard(action: str):
+        keyboard = telebot.types.InlineKeyboardMarkup(row_width=2)
+        buttons = []
+        seen = set()
+        for country in get_country_details():
+            # "bd" is an alias for Bangladesh; show it only once.
+            canonical = "bangladesh" if country == "bd" else country
+            if canonical in seen:
+                continue
+            seen.add(canonical)
+            buttons.append(
+                telebot.types.InlineKeyboardButton(
+                    f"🌍 {canonical.capitalize()}",
+                    callback_data=f"menu:{action}:{canonical}",
+                )
+            )
+        keyboard.add(*buttons)
+        return keyboard
+
+    def _send_user_menu(message):
+        b.reply_to(
+            message,
+            get_text("user_menu"),
+            reply_markup=_user_menu_keyboard(),
+            parse_mode="Markdown",
+        )
+
+    def _notify_new_pending_user(message):
+        user = getattr(message, "from_user", message)
+        uname = f"@{user.username}" if user.username else "N/A"
+        fullname = f"{user.first_name or ''} {user.last_name or ''}".strip() or "N/A"
+        Thread(target=notify_admin, args=(
+            get_text(
+                "approval_admin_notify",
+                fullname=fullname,
+                uname=uname,
+                user_id=user.id,
+                total_users=f"{len(KNOWN_USERS):,}",
+            ),
+            build_approval_keyboard(user.id),
+        ), daemon=True).start()
+
+    def _track_entry_user(subject):
+        user = getattr(subject, "from_user", subject)
+        is_new = track_user(
+            user.id,
+            user.username,
+            user.first_name,
+        )
+        if is_new and user.id != get_admin_id():
+            _notify_new_pending_user(subject)
+        return is_new
+
+    def _approval_guard(message) -> bool:
+        """Stop unapproved users before any user-facing bot action."""
+        user_id = message.from_user.id
+        if is_user_approved(user_id):
+            return True
+        status = get_approval_status(user_id)
+        key = "approval_rejected" if status == "rejected" else "approval_pending"
+        b.reply_to(message, get_text(key))
+        return False
+
+    def _send_country_menu(message, action: str):
+        icon = "🤖" if action == "ai" else "⚡"
+        b.reply_to(
+            message,
+            get_text("country_menu", icon=icon),
+            reply_markup=_country_keyboard(action),
+        )
+
+    def _send_generated_profile(chat_id, user, country_input):
+        """Generate and send a regular profile from a menu or typed country."""
+        if not is_user_approved(user.id):
+            key = "approval_rejected" if get_approval_status(user.id) == "rejected" else "approval_pending"
+            b.send_message(chat_id, get_text(key))
+            return
+        if is_banned(user.id):
+            b.send_message(chat_id, get_text("banned_reply"))
+            return
+        try:
+            country_details = get_country_details()
+            profile = generate_profile(country_input)
+            if not profile:
+                b.send_message(chat_id, get_text("profile_failed"))
+                return
+            recent_log.append(profile)
+            Thread(target=record_user_profile, args=(user.id, profile), daemon=True).start()
+            if country_details[country_input].get("is_bd"):
+                log_name_usage(
+                    bd_name=profile["full_name"],
+                    user_id=user.id,
+                    username=user.username,
+                    first_name=user.first_name,
+                )
+            track_user(user.id, user.username, user.first_name, increment_count=True)
+            enabled = _get_enabled_fields()
+            field_lines = ""
+            for key in FIELD_KEYS:
+                if key in enabled and key in profile:
+                    field_lines += f"{FIELD_EMOJI[key]} {FIELD_LABELS[key]}: `{profile[key]}`\n"
+            tg = user.username
+            tg_mention = f"@{tg}" if tg else "Not Available"
+            dev_name = get_developer_name()
+            dev_line = f"👤 Developer: {dev_name}\n" if dev_name else ""
+            b.send_message(
+                chat_id,
+                get_text(
+                    "profile_reply",
+                    dev_line=dev_line,
+                    tg_mention=tg_mention,
+                    country=country_input.capitalize(),
+                    field_lines=field_lines,
+                ),
+                parse_mode="Markdown",
+                reply_markup=build_profile_copy_keyboard(profile, enabled),
+            )
+        except Exception:
+            b.send_message(chat_id, get_text("profile_failed"))
+
+    def _run_ai_generation(chat_id, user, country_arg):
+        """Generate an AI-assisted profile and send it asynchronously."""
+        if not is_user_approved(user.id):
+            key = "approval_rejected" if get_approval_status(user.id) == "rejected" else "approval_pending"
+            b.send_message(chat_id, get_text(key))
+            return
+        if is_banned(user.id):
+            b.send_message(chat_id, get_text("banned_reply"))
+            return
+        if not _GEMINI_KEY:
+            b.send_message(chat_id, get_text("ai_unavailable"))
+            return
+        country_details = get_country_details()
+        if country_arg not in country_details:
+            keys = ", ".join(k.capitalize() for k in country_details.keys())
+            b.send_message(chat_id, get_text("ai_unknown_country", keys=keys))
+            return
+
+        wait_msg = b.send_message(chat_id, get_text("ai_generating"))
+
+        def _do_ainame():
+            ai_name = generate_ai_name(country_arg)
+            profile = generate_profile(country_arg)
+            if not profile:
+                try:
+                    b.delete_message(chat_id, wait_msg.message_id)
+                except Exception:
+                    pass
+                b.send_message(chat_id, get_text("ai_profile_failed"))
+                return
+
+            if ai_name:
+                profile["full_name"] = ai_name
+                profile["facebook_id"] = ai_name
+                clean = re.sub(r"[^a-zA-Z0-9]", "", ai_name).lower()
+                if clean:
+                    rnum = random.randint(1000, 9999)
+                    profile["username"] = f"{clean[:12]}{rnum}"
+                    profile["email"] = f"{clean}{rnum}@gmail.com"
+                    profile["google"] = profile["email"]
+
+            Thread(target=record_user_profile, args=(user.id, profile), daemon=True).start()
+            enabled = _get_enabled_fields()
+            field_lines = ""
+            for key in FIELD_KEYS:
+                if key in enabled and key in profile:
+                    field_lines += f"{FIELD_EMOJI[key]} {FIELD_LABELS[key]}: `{profile[key]}`\n"
+
+            dev_name = get_developer_name()
+            dev_line = f"👤 Developer: {dev_name}\n" if dev_name else ""
+            tg = user.username
+            tg_mention = f"@{tg}" if tg else "Not Available"
+            ai_badge = "🤖 *AI Generated*" if ai_name else "⚡ *Auto Generated*"
+            try:
+                b.delete_message(chat_id, wait_msg.message_id)
+            except Exception:
+                pass
+            b.send_message(
+                chat_id,
+                get_text(
+                    "ai_reply",
+                    dev_line=dev_line,
+                    ai_badge=ai_badge,
+                    tg_mention=tg_mention,
+                    country=country_arg.capitalize(),
+                    field_lines=field_lines,
+                ),
+                parse_mode="Markdown",
+                reply_markup=build_profile_copy_keyboard(profile, enabled),
+            )
+
+        Thread(target=_do_ainame, daemon=True).start()
+
     @b.message_handler(commands=['start'])
     def send_welcome(message):
-        is_new = track_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
-        if not user_is_approved(message.from_user.id):
-            b.reply_to(message, user_access_message(message.from_user.id))
-            if is_new:
-                user = message.from_user
-                Thread(target=notify_admin, args=(
-                    get_text(
-                        "pending_user_notify",
-                        fullname=user.first_name or "N/A",
-                        uname=f"@{user.username}" if user.username else "N/A",
-                        user_id=user.id,
-                    ),
-                ), daemon=True).start()
+        _track_entry_user(message)
+        if not _approval_guard(message):
             return
         used_count   = len(USED_NAMES)
         remaining    = get_total_combinations() - used_count
         country_keys = ", ".join(k.capitalize() for k in get_country_details().keys())
-        b.reply_to(
-            message,
-            get_text(
-                "welcome",
-                country_keys=country_keys,
-                used_count=f"{used_count:,}",
-                remaining=f"{remaining:,}",
-            ),
-            reply_markup=build_main_reply_keyboard(),
-        )
-        if is_new:
-            user = message.from_user
-            uname    = f"@{user.username}" if user.username else "N/A"
-            fullname = f"{user.first_name or ''} {user.last_name or ''}".strip() or "N/A"
-            Thread(target=notify_admin, args=(
-                get_text("new_user_notify",
-                    fullname=fullname, uname=uname,
-                    user_id=user.id, total_users=f"{len(KNOWN_USERS):,}"),
-            ), daemon=True).start()
-
+        b.reply_to(message, get_text("welcome",
+            country_keys=country_keys,
+            used_count=f"{used_count:,}",
+            remaining=f"{remaining:,}",
+        ), reply_markup=_user_menu_keyboard())
     @b.message_handler(commands=['panel'])
     def admin_panel(message):
         admin_id = get_admin_id()
@@ -1213,8 +1496,8 @@ def register_handlers(b: telebot.TeleBot):
 
     @b.message_handler(commands=['history'])
     def send_history(message):
-        track_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
-        if not require_user_approval(b, message):
+        _track_entry_user(message)
+        if not _approval_guard(message):
             return
         with user_profiles_lock:
             history = list(USER_PROFILES.get(message.from_user.id, []))
@@ -1235,8 +1518,8 @@ def register_handlers(b: telebot.TeleBot):
 
     @b.message_handler(commands=['files'])
     def list_downloadable_files(message):
-        track_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
-        if not require_user_approval(b, message):
+        _track_entry_user(message)
+        if not _approval_guard(message):
             return
         if is_banned(message.from_user.id):
             b.reply_to(message, get_text("banned_reply"))
@@ -1251,10 +1534,20 @@ def register_handlers(b: telebot.TeleBot):
     @b.callback_query_handler(func=lambda call: bool(call.data and call.data.startswith("file:")))
     def download_file_button(call):
         user = call.from_user
-        track_user(user.id, user.username, user.first_name)
-        notice = user_access_message(user.id)
-        if notice:
-            b.send_message(call.message.chat.id, notice)
+        _track_entry_user(user)
+        if not is_user_approved(user.id):
+            try:
+                b.answer_callback_query(
+                    call.id,
+                    get_text(
+                        "approval_rejected"
+                        if get_approval_status(user.id) == "rejected"
+                        else "approval_pending",
+                    )[:200],
+                    show_alert=True,
+                )
+            except Exception:
+                pass
             return
         try:
             b.answer_callback_query(call.id, "ফাইল পাঠানো হচ্ছে…")
@@ -1272,8 +1565,8 @@ def register_handlers(b: telebot.TeleBot):
 
     @b.message_handler(commands=['download', 'getfile'])
     def download_stored_file(message):
-        track_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
-        if not require_user_approval(b, message):
+        _track_entry_user(message)
+        if not _approval_guard(message):
             return
         if is_banned(message.from_user.id):
             b.reply_to(message, get_text("banned_reply"))
@@ -1296,83 +1589,95 @@ def register_handlers(b: telebot.TeleBot):
         if not ok:
             b.reply_to(message, f"⚠️ {error}")
 
-    @b.message_handler(commands=['ainame'])
-    def send_ai_name(message, country_override=None):
-        track_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
-        if not require_user_approval(b, message):
+    @b.message_handler(commands=['help'])
+    def help_command(message):
+        _track_entry_user(message)
+        if not _approval_guard(message):
             return
-
         if is_banned(message.from_user.id):
             b.reply_to(message, get_text("banned_reply"))
             return
+        b.reply_to(
+            message,
+            get_text("help"),
+            reply_markup=_user_menu_keyboard(),
+            parse_mode="Markdown",
+        )
 
-        if not _GEMINI_KEY:
-            b.reply_to(message, get_text("ai_unavailable"))
+    @b.message_handler(func=lambda message: (message.text or "").strip() == USER_MENU_BUTTONS["generate"])
+    def menu_generate(message):
+        _track_entry_user(message)
+        if not _approval_guard(message):
             return
-
-        parts       = message.text.strip().split(maxsplit=1)
-        country_arg = country_override or (parts[1].strip().lower() if len(parts) > 1 else "bangladesh")
-
-        country_details = get_country_details()
-        if country_arg not in country_details:
-            keys = ", ".join(k.capitalize() for k in country_details.keys())
-            b.reply_to(message, get_text("ai_unknown_country", keys=keys))
+        if is_banned(message.from_user.id):
+            b.reply_to(message, get_text("banned_reply"))
             return
+        _send_country_menu(message, "generate")
 
-        wait_msg = b.reply_to(message, get_text("ai_generating"))
+    @b.message_handler(func=lambda message: (message.text or "").strip() == USER_MENU_BUTTONS["ai"])
+    def menu_ai(message):
+        _track_entry_user(message)
+        if not _approval_guard(message):
+            return
+        if is_banned(message.from_user.id):
+            b.reply_to(message, get_text("banned_reply"))
+            return
+        _send_country_menu(message, "ai")
 
-        def _do_ainame():
-            ai_name = generate_ai_name(country_arg)
+    @b.message_handler(func=lambda message: (message.text or "").strip() == USER_MENU_BUTTONS["history"])
+    def menu_history(message):
+        send_history(message)
 
-            # Fall back to regular generation if AI fails
-            profile = generate_profile(country_arg)
-            if not profile:
-                try:
-                    b.delete_message(message.chat.id, wait_msg.message_id)
-                except Exception:
-                    pass
-                b.reply_to(message, get_text("ai_profile_failed"))
-                return
+    @b.message_handler(func=lambda message: (message.text or "").strip() == USER_MENU_BUTTONS["files"])
+    def menu_files(message):
+        list_downloadable_files(message)
 
-            if ai_name:
-                profile["full_name"]   = ai_name
-                profile["facebook_id"] = ai_name
-                clean = re.sub(r'[^a-zA-Z0-9]', '', ai_name).lower()
-                if clean:
-                    rnum = random.randint(1000, 9999)
-                    profile["username"] = f"{clean[:12]}{rnum}"
-                    profile["email"]    = f"{clean}{rnum}@gmail.com"
-                    profile["google"]   = profile["email"]
+    @b.message_handler(func=lambda message: (message.text or "").strip() == USER_MENU_BUTTONS["help"])
+    def menu_help(message):
+        help_command(message)
 
-            Thread(target=record_user_profile, args=(message.from_user.id, profile), daemon=True).start()
-
-            enabled = _get_enabled_fields()
-            field_lines = ""
-            for key in FIELD_KEYS:
-                if key in enabled and key in profile:
-                    field_lines += f"{FIELD_EMOJI[key]} {FIELD_LABELS[key]}: `{profile[key]}`\n"
-
-            dev_name   = get_developer_name()
-            dev_line   = f"👤 Developer: {dev_name}\n" if dev_name else ""
-            tg         = message.from_user.username
-            tg_mention = f"@{tg}" if tg else "Not Available"
-            ai_badge   = "🤖 *AI Generated*" if ai_name else "⚡ *Auto Generated*"
-
+    @b.callback_query_handler(func=lambda call: bool(call.data and call.data.startswith("menu:")))
+    def menu_callback(call):
+        try:
+            b.answer_callback_query(call.id)
+        except Exception:
+            pass
+        parts = call.data.split(":", 2)
+        if len(parts) != 3:
+            return
+        action, country = parts[1], parts[2].lower()
+        user = call.from_user
+        _track_entry_user(user)
+        if not is_user_approved(user.id):
             try:
-                b.delete_message(message.chat.id, wait_msg.message_id)
+                b.answer_callback_query(
+                    call.id,
+                    get_text(
+                        "approval_rejected"
+                        if get_approval_status(user.id) == "rejected"
+                        else "approval_pending",
+                    )[:200],
+                    show_alert=True,
+                )
             except Exception:
                 pass
+            return
+        if is_banned(user.id):
+            b.send_message(call.message.chat.id, get_text("banned_reply"))
+            return
+        if action == "generate":
+            _send_generated_profile(call.message.chat.id, user, country)
+        elif action == "ai":
+            _run_ai_generation(call.message.chat.id, user, country)
 
-            b.reply_to(message,
-                get_text("ai_reply",
-                    dev_line=dev_line, ai_badge=ai_badge,
-                    tg_mention=tg_mention, country=country_arg.capitalize(),
-                    field_lines=field_lines,
-                ),
-                parse_mode="Markdown"
-            )
-
-        Thread(target=_do_ainame, daemon=True).start()
+    @b.message_handler(commands=['ainame'])
+    def send_ai_name(message):
+        _track_entry_user(message)
+        if not _approval_guard(message):
+            return
+        parts       = message.text.strip().split(maxsplit=1)
+        country_arg = parts[1].strip().lower() if len(parts) > 1 else "bangladesh"
+        _run_ai_generation(message.chat.id, message.from_user, country_arg)
 
     # ────────────────────────────────────────────
     # Admin Bot Commands — Dashboard Control via Bot
@@ -1413,9 +1718,131 @@ def register_handlers(b: telebot.TeleBot):
             "• /files — সংরক্ষিত ফাইলের তালিকা\n"
             "• /download `<কমান্ড>` — ফাইল পাঠান\n\n"
             "🛑 *বট স্টপ*\n"
-            "• /stopbot — পোলিং বন্ধ করুন",
+            "• /stopbot — পোলিং বন্ধ করুন"
+            + get_text("approval_admin_menu"),
             parse_mode="Markdown"
         )
+
+    @b.message_handler(commands=['pending'])
+    def pending_users_cmd(message):
+        if not _admin_only(message):
+            return
+        with users_lock:
+            pending = [
+                (uid, info.copy())
+                for uid, info in KNOWN_USERS.items()
+                if info.get("approval_status") == "pending"
+            ]
+        if not pending:
+            b.reply_to(message, get_text("approval_none_pending"))
+            return
+        lines = []
+        keyboard = telebot.types.InlineKeyboardMarkup(row_width=2)
+        for uid, info in pending[:50]:
+            username = f"@{info.get('username')}" if info.get("username") else "—"
+            name = info.get("first_name") or "—"
+            lines.append(f"• {name} {username} — ID: {uid}")
+            keyboard.add(
+                telebot.types.InlineKeyboardButton(
+                    f"✅ {uid}",
+                    callback_data=f"approval:approve:{uid}",
+                ),
+                telebot.types.InlineKeyboardButton(
+                    f"❌ {uid}",
+                    callback_data=f"approval:reject:{uid}",
+                ),
+            )
+        if len(pending) > 50:
+            lines.append(f"\n…আরও {len(pending) - 50} জন pending আছে।")
+        b.reply_to(
+            message,
+            get_text(
+                "approval_pending_list",
+                count=len(pending),
+                users="\n".join(lines),
+            ),
+            reply_markup=keyboard,
+            parse_mode="Markdown",
+        )
+
+    def _set_user_approval_from_command(message, status: str):
+        if not _admin_only(message):
+            return
+        parts = (message.text or "").strip().split()
+        action = "approve" if status == "approved" else "reject"
+        if len(parts) < 2 or not parts[1].lstrip("-").isdigit():
+            b.reply_to(
+                message,
+                get_text("approval_admin_usage", action=action),
+                parse_mode="Markdown",
+            )
+            return
+        user_id = int(parts[1])
+        if not set_approval_status(user_id, status):
+            b.reply_to(message, get_text("approval_admin_not_found"))
+            return
+        key = "approval_admin_approved" if status == "approved" else "approval_admin_rejected"
+        b.reply_to(message, get_text(key, user_id=user_id), parse_mode="Markdown")
+        try:
+            if status == "approved":
+                b.send_message(
+                    user_id,
+                    get_text("approval_granted"),
+                    reply_markup=_user_menu_keyboard(),
+                )
+            else:
+                b.send_message(user_id, get_text("approval_rejected"))
+        except Exception as e:
+            print(f"[approval] user notification failed for {user_id}: {e}")
+
+    @b.message_handler(commands=['approve'])
+    def approve_user_cmd(message):
+        _set_user_approval_from_command(message, "approved")
+
+    @b.message_handler(commands=['reject'])
+    def reject_user_cmd(message):
+        _set_user_approval_from_command(message, "rejected")
+
+    @b.callback_query_handler(func=lambda call: bool(call.data and call.data.startswith("approval:")))
+    def approval_callback(call):
+        if call.from_user.id != get_admin_id():
+            try:
+                b.answer_callback_query(call.id, "❌ শুধু অ্যাডমিন এই action করতে পারবেন।", show_alert=True)
+            except Exception:
+                pass
+            return
+        parts = call.data.split(":")
+        if len(parts) != 3 or not parts[2].lstrip("-").isdigit():
+            return
+        action, user_id = parts[1], int(parts[2])
+        status = "approved" if action == "approve" else "rejected" if action == "reject" else None
+        if not status or not set_approval_status(user_id, status):
+            try:
+                b.answer_callback_query(call.id, get_text("approval_admin_not_found"), show_alert=True)
+            except Exception:
+                pass
+            return
+        key = "approval_admin_approved" if status == "approved" else "approval_admin_rejected"
+        try:
+            b.answer_callback_query(call.id, get_text(key, user_id=user_id))
+            b.edit_message_reply_markup(
+                call.message.chat.id,
+                call.message.message_id,
+                reply_markup=None,
+            )
+        except Exception:
+            pass
+        try:
+            if status == "approved":
+                b.send_message(
+                    user_id,
+                    get_text("approval_granted"),
+                    reply_markup=_user_menu_keyboard(),
+                )
+            else:
+                b.send_message(user_id, get_text("approval_rejected"))
+        except Exception as e:
+            print(f"[approval] user notification failed for {user_id}: {e}")
 
     @b.message_handler(commands=['stats'])
     def bot_stats(message):
@@ -1459,42 +1886,6 @@ def register_handlers(b: telebot.TeleBot):
         if page < total_pages:
             lines.append(f"\n➡️ পরের পেজ: /users {page + 1}")
         b.reply_to(message, "\n".join(lines), parse_mode="Markdown")
-
-    @b.message_handler(commands=['approve', 'reject', 'pending'])
-    def user_workflow_cmd(message):
-        if not _admin_only(message): return
-        command = (message.text or "").split()[0].lstrip("/").lower()
-        parts = message.text.strip().split(maxsplit=1)
-        if command == "pending" and len(parts) == 1:
-            with users_lock:
-                pending = [
-                    (uid, info) for uid, info in KNOWN_USERS.items()
-                    if _user_status(info) == "pending"
-                ]
-            if not pending:
-                b.reply_to(message, "✅ কোনো pending user নেই।")
-                return
-            lines = [f"⏳ *Pending users* ({len(pending)})\n"]
-            for uid, info in pending[:30]:
-                lines.append(f"• `{uid}` {info.get('first_name') or '—'}")
-            b.reply_to(message, "\n".join(lines), parse_mode="Markdown")
-            return
-        if len(parts) < 2 or not parts[1].split()[0].lstrip("-").isdigit():
-            b.reply_to(message, "⚠️ ব্যবহার: /approve `<user_id>` অথবা /reject `<user_id>`", parse_mode="Markdown")
-            return
-        uid = int(parts[1].split()[0])
-        status = "approved" if command == "approve" else "rejected"
-        reason = "Admin bot command"
-        with users_lock:
-            info = KNOWN_USERS.get(uid)
-            if not info:
-                b.reply_to(message, "❌ ইউজার পাওয়া যায়নি।")
-                return
-            info["status"] = status
-            info["status_reason"] = reason
-            info["status_changed_at"] = _dt.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
-            save_users(KNOWN_USERS)
-        b.reply_to(message, f"✅ ইউজার `{uid}` {status} করা হয়েছে।", parse_mode="Markdown")
 
     @b.message_handler(commands=['usage'])
     def usage_list(message):
@@ -1629,7 +2020,8 @@ def register_handlers(b: telebot.TeleBot):
                 f"{field_lines}"
                 f"━━━━━━━━━━━━━━━━━━━━\n"
                 f"_(লগ বা হিস্ট্রিতে সেভ হয়নি)_",
-                parse_mode="Markdown"
+                parse_mode="Markdown",
+                reply_markup=build_profile_copy_keyboard(profile, enabled),
             )
         except Exception:
             b.reply_to(message, "⚠️ প্রোফাইল তৈরি করা সম্ভব হয়নি।")
@@ -1704,18 +2096,9 @@ def register_handlers(b: telebot.TeleBot):
 
     @b.message_handler(func=lambda message: True)
     def handle_all_messages(message):
-        is_new = track_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
-        if is_new:
-            user = message.from_user
-            uname    = f"@{user.username}" if user.username else "N/A"
-            fullname = f"{user.first_name or ''} {user.last_name or ''}".strip() or "N/A"
-            Thread(target=notify_admin, args=(
-                get_text("new_user_notify",
-                    fullname=fullname, uname=uname,
-                    user_id=user.id, total_users=f"{len(KNOWN_USERS):,}"),
-            ), daemon=True).start()
+        _track_entry_user(message)
 
-        if not require_user_approval(b, message):
+        if not _approval_guard(message):
             return
 
         if is_banned(message.from_user.id):
@@ -1723,24 +2106,6 @@ def register_handlers(b: telebot.TeleBot):
             return
 
         if not message.text:
-            return
-
-        button_action = re.sub(r"\s+", " ", message.text.strip()).casefold()
-        if button_action in {"⚡ generate profile", "generate profile"}:
-            country_keys = ", ".join(k.capitalize() for k in get_country_details().keys())
-            b.reply_to(message, get_text("button_generate_prompt", country_keys=country_keys))
-            return
-        if button_action in {"🤖 ai name", "ai name"}:
-            send_ai_name(message, "bangladesh")
-            return
-        if button_action in {"📋 my history", "my history"}:
-            send_history(message)
-            return
-        if button_action in {"📂 files", "files"}:
-            list_downloadable_files(message)
-            return
-        if button_action in {"❓ help", "help"}:
-            b.reply_to(message, get_text("button_help"), parse_mode="Markdown")
             return
 
         country_input   = message.text.strip().lower()
@@ -1782,7 +2147,8 @@ def register_handlers(b: telebot.TeleBot):
                     dev_line=dev_line, tg_mention=tg_mention,
                     country=country_input.capitalize(), field_lines=field_lines,
                 ),
-                parse_mode="Markdown"
+                parse_mode="Markdown",
+                reply_markup=build_profile_copy_keyboard(profile, enabled),
             )
         except Exception:
             b.reply_to(message, get_text("profile_failed"))
@@ -2326,8 +2692,6 @@ def api_ai_prompts_reset():
 def api_user_stats():
     q = request.args.get('q', '').strip().lower()
     with users_lock:
-        if _auto_reject_inactive_users():
-            save_users(KNOWN_USERS)
         data = [
             {"user_id": uid, **info}
             for uid, info in KNOWN_USERS.items()
@@ -2341,28 +2705,6 @@ def api_user_stats():
             or q in (e.get("first_name") or "").lower()
         ]
     return jsonify(entries=data, total=len(KNOWN_USERS))
-
-@app.route('/api/user-status', methods=['POST'])
-@login_required
-def api_user_status():
-    data = request.get_json(force=True) or {}
-    try:
-        user_id = int(data.get("user_id"))
-    except (TypeError, ValueError):
-        return jsonify(success=False, error="সঠিক User ID দিন।")
-    status = str(data.get("status", "")).strip().lower()
-    if status not in USER_STATUSES:
-        return jsonify(success=False, error="Status pending, approved অথবা rejected হতে হবে।")
-    reason = str(data.get("reason", "")).strip()[:300]
-    with users_lock:
-        info = KNOWN_USERS.get(user_id)
-        if not info:
-            return jsonify(success=False, error="ইউজার পাওয়া যায়নি।")
-        info["status"] = status
-        info["status_reason"] = reason
-        info["status_changed_at"] = _dt.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
-        save_users(KNOWN_USERS)
-    return jsonify(success=True, status=status, message=f"✅ ইউজার status {status} করা হয়েছে।")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Flask Routes — Broadcast API
@@ -2494,14 +2836,11 @@ def _run_due_schedules():
             save_schedules(SCHEDULES)
 
 def _scheduler_loop():
-    """Background daemon: checks schedules and inactive user status."""
+    """Background daemon: checks every 30 s for due schedules."""
     while True:
         _time_module.sleep(30)
         try:
             _run_due_schedules()
-            with users_lock:
-                if _auto_reject_inactive_users():
-                    save_users(KNOWN_USERS)
         except Exception as e:
             print(f"[Scheduler] loop error: {e}")
 
@@ -2597,13 +2936,10 @@ def api_files():
                 "downloads": int(item.get("downloads", 0) or 0),
                 "last_downloads": item.get("last_downloads", [])[-5:],
                 "size": item.get("size", 0),
-                "file_count": item.get("file_count", len(item.get("files", [])) or 1),
-                "filenames": [
-                    entry.get("filename", "")
-                    for entry in item.get("files", [])
-                    if isinstance(entry, dict)
-                ] or [item.get("filename", "")],
                 "created_at": item.get("created_at", ""),
+                "storage": item.get("storage", "disk"),
+                "source_chat_id": item.get("source_chat_id", ""),
+                "source_message_id": item.get("source_message_id", ""),
             }
             for item in STORED_FILES
         ]
@@ -2621,10 +2957,7 @@ def api_files_upload():
     allowed_raw = request.form.get("allowed_users", "").strip()
     expires_at = request.form.get("expires_at", "").strip()
     replace = request.form.get("replace", "").strip().lower() in {"1", "true", "yes", "on"}
-    file_objs = request.files.getlist("files")
-    if not file_objs:
-        legacy_file = request.files.get("file")
-        file_objs = [legacy_file] if legacy_file else []
+    file_obj = request.files.get("file")
 
     if not title:
         return jsonify(success=False, error="ফাইলের একটি নাম দিন।")
@@ -2649,22 +2982,15 @@ def api_files_upload():
                 return jsonify(success=False, error="Expiry সময় ভবিষ্যতের হতে হবে।")
         except ValueError:
             return jsonify(success=False, error="Expiry সময় সঠিক নয়।")
-    file_objs = [file_obj for file_obj in file_objs if file_obj and file_obj.filename]
-    if not file_objs:
+    if not file_obj or not file_obj.filename:
         return jsonify(success=False, error="ফাইল সিলেক্ট করুন।")
-    if len(file_objs) > FILE_MAX_COUNT:
-        return jsonify(success=False, error=f"একটি command-এর মধ্যে সর্বোচ্চ {FILE_MAX_COUNT}টি ফাইল রাখা যাবে।")
-    uploaded_files = []
-    total_size = 0
-    for file_obj in file_objs:
-        filename = os.path.basename(file_obj.filename).strip() or "download"
-        raw = file_obj.read()
-        if not raw:
-            return jsonify(success=False, error=f"{filename} খালি ফাইল।")
-        total_size += len(raw)
-        if total_size > FILE_MAX_BYTES:
-            return jsonify(success=False, error="একটি bundle-এর সব ফাইল মিলিয়ে সর্বোচ্চ 50 MB রাখা যাবে।")
-        uploaded_files.append({"filename": filename, "raw": raw})
+
+    filename = os.path.basename(file_obj.filename).strip() or "download"
+    raw = file_obj.read()
+    if not raw:
+        return jsonify(success=False, error="খালি ফাইল আপলোড করা যাবে না।")
+    if len(raw) > FILE_MAX_BYTES:
+        return jsonify(success=False, error="ফাইলের সর্বোচ্চ সাইজ 50 MB।")
 
     with stored_files_lock:
         existing_index = next(
@@ -2674,35 +3000,18 @@ def api_files_upload():
         if existing_index is not None and not replace:
             return jsonify(success=False, error=f"/download {command} ইতিমধ্যে ব্যবহার করা হয়েছে।")
         os.makedirs(FILE_STORAGE_DIR, exist_ok=True)
-        file_entries = []
+        stored_name = f"{secrets_module.token_hex(16)}_{filename}"
+        file_path = os.path.join(FILE_STORAGE_DIR, stored_name)
         try:
-            for uploaded in uploaded_files:
-                stored_name = f"{secrets_module.token_hex(16)}_{uploaded['filename']}"
-                file_path = os.path.join(FILE_STORAGE_DIR, stored_name)
-                with open(file_path, "wb") as fh:
-                    fh.write(uploaded["raw"])
-                file_entries.append({
-                    "filename": uploaded["filename"],
-                    "path": file_path,
-                    "size": len(uploaded["raw"]),
-                })
+            with open(file_path, "wb") as fh:
+                fh.write(raw)
         except OSError as exc:
-            for entry in file_entries:
-                try:
-                    os.remove(entry["path"])
-                except OSError:
-                    pass
             print(f"[FileUpload] save error: {exc}")
             return jsonify(success=False, error="ফাইল সংরক্ষণ করা যায়নি।")
 
         existing = STORED_FILES[existing_index] if existing_index is not None else {}
-        item_id = existing.get("id") or secrets_module.token_hex(8)
-        zip_buffer = io.BytesIO()
-        with zipfile.ZipFile(zip_buffer, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
-            for uploaded in uploaded_files:
-                bundle.writestr(uploaded["filename"], uploaded["raw"])
         item = {
-            "id": item_id,
+            "id": existing.get("id") or secrets_module.token_hex(8),
             "title": title,
             "command": command,
             "caption": caption,
@@ -2711,17 +3020,14 @@ def api_files_upload():
             "access_mode": access_mode,
             "allowed_users": allowed_users,
             "expires_at": expires_at,
-            "filename": file_entries[0]["filename"],
-            "path": file_entries[0]["path"] if len(file_entries) == 1 else "",
-            "files": file_entries,
-            "file_count": len(file_entries),
-            "size": total_size,
+            "filename": filename,
+            "path": file_path,
+            "size": len(raw),
             "created_at": _dt.now().strftime("%Y-%m-%d %H:%M:%S"),
             "downloads": int(existing.get("downloads", 0) or 0),
             "last_downloads": existing.get("last_downloads", []),
         }
-        item["storage"] = "database" if db_set_blob(item["id"], zip_buffer.getvalue()) else "disk"
-        item["storage_format"] = "zip"
+        item["storage"] = "database" if db_set_blob(item["id"], raw) else "disk"
         if existing_index is None:
             STORED_FILES.append(item)
         else:
@@ -2733,31 +3039,131 @@ def api_files_upload():
                 STORED_FILES.pop()
             else:
                 STORED_FILES[existing_index] = existing
-            for entry in file_entries:
-                try:
-                    os.remove(entry["path"])
-                except OSError:
-                    pass
+            try:
+                os.remove(file_path)
+            except OSError:
+                pass
             print(f"[FileUpload] index save error: {exc}")
             return jsonify(success=False, error="ফাইলের তথ্য সংরক্ষণ করা যায়নি।")
+        if existing_index is not None and existing.get("path") and existing.get("path") != file_path:
+            try:
+                os.remove(existing["path"])
+            except OSError:
+                pass
+
+    action = "আপডেট" if existing_index is not None else "সেভ"
+    return jsonify(success=True, message=f"✅ ফাইল {action} হয়েছে। ইউজার ব্যবহার করবে: /download {command}")
+
+@app.route('/api/files/channel', methods=['POST'])
+@login_required
+def api_files_channel():
+    """Register a file that will be copied from a private Telegram channel."""
+    title = request.form.get("title", "").strip()
+    command = request.form.get("command", "").strip().lstrip("/").lower()
+    caption = request.form.get("caption", "").strip()
+    category = request.form.get("category", "").strip()[:40] or "General"
+    version = request.form.get("version", "").strip()[:30]
+    access_mode = request.form.get("access_mode", "all").strip().lower()
+    allowed_raw = request.form.get("allowed_users", "").strip()
+    expires_at = request.form.get("expires_at", "").strip()
+    replace = request.form.get("replace", "").strip().lower() in {"1", "true", "yes", "on"}
+    source_chat_id = request.form.get("source_chat_id", "").strip()
+    source_message_id = request.form.get("source_message_id", "").strip()
+
+    if not title:
+        return jsonify(success=False, error="ফাইলের একটি নাম দিন।")
+    if not re.fullmatch(r"[a-z][a-z0-9_]{1,31}", command):
+        return jsonify(
+            success=False,
+            error="কমান্ড 2–32 অক্ষরের হতে হবে; শুধু ইংরেজি ছোট হাতের অক্ষর, সংখ্যা ও _ ব্যবহার করুন।",
+        )
+    if not source_chat_id:
+        return jsonify(success=False, error="Private channel ID দিন, যেমন -1001234567890।")
+    if not (
+        re.fullmatch(r"-?\d+", source_chat_id)
+        or re.fullmatch(r"@[A-Za-z0-9_]{5,}", source_chat_id)
+    ):
+        return jsonify(success=False, error="Channel ID -100... অথবা @channelusername আকারে দিন।")
+    try:
+        source_message_id = int(source_message_id)
+        if source_message_id <= 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        return jsonify(success=False, error="সঠিক private channel message ID দিন।")
+    if access_mode not in {"all", "selected"}:
+        return jsonify(success=False, error="Access mode সঠিক নয়।")
+    allowed_users = []
+    if access_mode == "selected":
+        try:
+            allowed_users = sorted({int(value.strip()) for value in allowed_raw.split(",") if value.strip()})
+        except ValueError:
+            return jsonify(success=False, error="Allowed User ID কমা দিয়ে সঠিকভাবে দিন।")
+        if not allowed_users:
+            return jsonify(success=False, error="Selected users access-এর জন্য অন্তত একটি User ID দিন।")
+    if expires_at:
+        try:
+            if _dt.fromisoformat(expires_at) <= _dt.now():
+                return jsonify(success=False, error="Expiry সময় ভবিষ্যতের হতে হবে।")
+        except ValueError:
+            return jsonify(success=False, error="Expiry সময় সঠিক নয়।")
+
+    with stored_files_lock:
+        existing_index = next(
+            (i for i, item in enumerate(STORED_FILES) if item.get("command") == command),
+            None,
+        )
+        if existing_index is not None and not replace:
+            return jsonify(success=False, error=f"/download {command} ইতিমধ্যে ব্যবহার করা হয়েছে।")
+
+        existing = STORED_FILES[existing_index] if existing_index is not None else {}
+        item = {
+            "id": existing.get("id") or secrets_module.token_hex(8),
+            "title": title,
+            "command": command,
+            "caption": caption,
+            "category": category,
+            "version": version,
+            "access_mode": access_mode,
+            "allowed_users": allowed_users,
+            "expires_at": expires_at,
+            "filename": f"channel-message-{source_message_id}",
+            "path": "",
+            "size": 0,
+            "created_at": _dt.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "downloads": int(existing.get("downloads", 0) or 0),
+            "last_downloads": existing.get("last_downloads", []),
+            "storage": "telegram_channel",
+            "source_chat_id": source_chat_id,
+            "source_message_id": source_message_id,
+        }
+        if existing_index is None:
+            STORED_FILES.append(item)
+        else:
+            STORED_FILES[existing_index] = item
+        try:
+            save_stored_files(STORED_FILES)
+        except OSError as exc:
+            if existing_index is None:
+                STORED_FILES.pop()
+            else:
+                STORED_FILES[existing_index] = existing
+            print(f"[ChannelFile] index save error: {exc}")
+            return jsonify(success=False, error="Private channel file-এর তথ্য সংরক্ষণ করা যায়নি।")
+
         if existing_index is not None:
-            old_paths = [existing.get("path", "")]
-            old_paths.extend(
-                entry.get("path", "")
-                for entry in existing.get("files", [])
-                if isinstance(entry, dict)
-            )
-            for old_path in set(old_paths):
-                if old_path and old_path not in {entry["path"] for entry in file_entries}:
-                    try:
-                        os.remove(old_path)
-                    except OSError:
-                        pass
+            if existing.get("storage") == "database":
+                db_delete_blob(existing.get("id", ""))
+            old_path = existing.get("path", "")
+            if old_path and old_path != item["path"]:
+                try:
+                    os.remove(old_path)
+                except OSError:
+                    pass
 
     action = "আপডেট" if existing_index is not None else "সেভ"
     return jsonify(
         success=True,
-        message=f"✅ {len(file_entries)}টি ফাইল {action} হয়েছে। ইউজার ব্যবহার করবে: /download {command}",
+        message=f"✅ Private channel file {action} হয়েছে। ইউজার ব্যবহার করবে: /download {command}",
     )
 
 @app.route('/api/files/delete', methods=['POST'])
@@ -2776,17 +3182,10 @@ def api_files_delete():
             STORED_FILES.insert(index, item)
             print(f"[FileDelete] index save error: {exc}")
             return jsonify(success=False, error="ফাইল মুছে ফেলা যায়নি।")
-        paths = [item.get("path", "")]
-        paths.extend(
-            entry.get("path", "")
-            for entry in item.get("files", [])
-            if isinstance(entry, dict)
-        )
-        for path in set(paths):
-            try:
-                os.remove(path)
-            except OSError:
-                pass
+        try:
+            os.remove(item.get("path", ""))
+        except OSError:
+            pass
         db_delete_blob(item.get("id", ""))
     return jsonify(success=True, message="🗑️ ফাইল মুছে ফেলা হয়েছে।")
 
